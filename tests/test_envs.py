@@ -286,3 +286,107 @@ def test_dry_run_true_forces_dry_regardless_of_input_backend(monkeypatch):
     monkeypatch.setattr("flyds1.envs.game.make_input_backend", fake_make_input_backend)
     ScreenGameEnv(GameConfig(frame_source="dummy", dry_run=True, input_backend="xdotool"))
     assert captured["kind"] == "dry"
+
+
+def test_title_contains_matching():
+    from flyds1.envs.input_backends import _title_contains
+
+    assert _title_contains("DARK SOULS™: REMASTERED", "DARK SOULS")
+    assert _title_contains("dark souls: remastered", "Dark Souls")
+    assert not _title_contains("File Explorer", "DARK SOULS")
+    assert _title_contains(None, "DARK SOULS") is False
+    assert _title_contains("anything at all", None) is True
+    assert _title_contains(None, None) is True
+
+
+class _FakeGuardedBackend:
+    """Exercises the shared focus-guard policy without touching a real OS."""
+
+    def __init__(self):
+        from flyds1.envs.input_backends import _FocusGuardedBackend
+
+        class Impl(_FocusGuardedBackend):
+            def __init__(self):
+                super().__init__(window="TARGET")
+                self.focused = True
+                self.moves = []
+                self.pressed = []
+                self.released = []
+
+            def has_focus(self):
+                return self.focused
+
+            def _press(self, key):
+                self.pressed.append(key)
+
+            def _release(self, key):
+                self.released.append(key)
+
+            def _move_mouse_unguarded(self, dx, dy):
+                self.moves.append((dx, dy))
+
+        self.impl = Impl()
+
+    def __getattr__(self, name):
+        return getattr(self.impl, name)
+
+
+def test_focus_guard_blocks_input_while_unfocused():
+    """Regression: tabbing out of the game kept sending key presses and mouse
+    movement to whatever the desktop now had focused."""
+    backend = _FakeGuardedBackend().impl
+    bindings = {"forward": "w"}
+
+    backend.apply({"forward": True}, bindings)
+    assert backend.pressed == ["w"]
+    backend.move_mouse(10, 5)
+    assert backend.moves == [(10, 5)]
+
+    backend.focused = False
+    backend.apply({"forward": True}, bindings)  # still "held" -- must not repress
+    assert backend.pressed == ["w"], "no new presses while unfocused"
+    assert backend.released == ["w"], "losing focus releases what was held"
+    backend.move_mouse(50, -50)
+    assert backend.moves == [(10, 5)], "no mouse movement while unfocused"
+
+
+def test_focus_guard_only_releases_once():
+    backend = _FakeGuardedBackend().impl
+    backend.apply({"forward": True}, {"forward": "w"})
+    backend.focused = False
+    backend.apply({"forward": True}, {"forward": "w"})
+    backend.apply({"forward": True}, {"forward": "w"})
+    assert backend.released == ["w"], "release_all should not fire repeatedly"
+
+
+def test_focus_guard_resumes_after_regaining_focus():
+    backend = _FakeGuardedBackend().impl
+    backend.apply({"forward": True}, {"forward": "w"})
+    backend.focused = False
+    backend.apply({}, {"forward": "w"})  # lost focus mid-hold
+    backend.focused = True
+    backend.apply({"forward": True}, {"forward": "w"})
+    assert backend.pressed == ["w", "w"], "pressing again after refocus must work"
+
+
+def test_focus_guard_disabled_when_no_window_configured():
+    from flyds1.envs.input_backends import _FocusGuardedBackend
+
+    class Impl(_FocusGuardedBackend):
+        def __init__(self):
+            super().__init__(window=None)
+            self.moves = []
+
+        def _press(self, key):
+            pass
+
+        def _release(self, key):
+            pass
+
+        def _move_mouse_unguarded(self, dx, dy):
+            self.moves.append((dx, dy))
+
+    backend = Impl()
+    assert backend.has_focus() is True
+    backend.move_mouse(1, 1)
+    assert backend.moves == [(1, 1)]

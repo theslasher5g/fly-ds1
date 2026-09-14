@@ -112,7 +112,9 @@ class BossConfig:
     #: single switch for whether input is sent at all -- see GameConfig for why
     #: this does not also default to "dry".
     input_backend: str = "auto"
-    window_name: str | None = None
+    #: Focus guard target -- see GameConfig.window_name for why this matters
+    #: and is not merely an xdotool detail.
+    window_name: str | None = "DARK SOULS"
     dry_run: bool = True
 
     target_fps: float = 30.0

@@ -67,7 +67,17 @@ class GameConfig:
     #: forces DryRunBackend even if dry_run were somehow False, but there is
     #: no reason to set that -- use dry_run for that).
     input_backend: str = "auto"
-    window_name: str | None = None     # for xdotool targeting
+    #: Case-insensitive substring of the game window's title bar. This is not
+    #: just "for xdotool targeting" -- it is the focus guard both real input
+    #: backends use to refuse to act while a *different* window has OS focus
+    #: (see flyds1.envs.input_backends._FocusGuardedBackend for why that
+    #: matters: SendInput and X11 synthetic events both deliver to whatever
+    #: window is currently focused, not to a window you name, so without this
+    #: check tabbing out of the game sends every key press and mouse move to
+    #: the desktop instead). Defaults to this project's one target; override
+    #: for a different game, and set to None only if you specifically want no
+    #: guard at all.
+    window_name: str | None = "DARK SOULS"
     dry_run: bool = True               # True: never send input, regardless of input_backend
     target_fps: float = 30.0
     frame_width: int = 320             # resolution handed to the retina

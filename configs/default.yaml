@@ -94,7 +94,7 @@ env:
     frame_source: dummy
     replay_path: null
     input_backend: auto
-    window_name: null
+    window_name: DARK SOULS
     dry_run: true
     target_fps: 30.0
     frame_width: 320
@@ -120,7 +120,7 @@ env:
     frame_source: dummy
     replay_path: null
     input_backend: auto
-    window_name: null
+    window_name: DARK SOULS
     dry_run: true
     target_fps: 30.0
     action_repeat: 4

@@ -182,3 +182,20 @@ you want the robustness. The code is arranged for it —
 :class:`flyds1.envs.detectors.FightStateDetector` is the whole state interface,
 and a memory-backed implementation drops in without touching the env, the
 retina, or the brain.
+
+## Alt-tabbing out is safe by default
+
+Reported live: tabbing out of Dark Souls left the agent clicking and moving the
+mouse across the desktop. `SendInput` on Windows (and, in practice, X11
+synthetic events) deliver to whatever window currently has OS focus, not to a
+window you name -- there is no way to say "send this specifically to Dark
+Souls" at that API level. Every real backend now checks the foreground
+window's title before acting and releases whatever it was holding the instant
+focus is lost, so a key never reads as stuck down when you tab back in.
+
+This is on by default: `window_name` defaults to `"DARK SOULS"`, a
+case-insensitive substring match against the title bar (matches "DARK
+SOULS™: REMASTERED"). Override it for a different game with
+`--set env.game.window_name=...` (or `env.boss.window_name`); setting it to
+`None` disables the guard entirely, which is never the right call for normal
+use.
