@@ -112,6 +112,7 @@ class RetinaFrontEnd:
                 "sampler": sampler,
                 "bank": bank,
                 "adapt": None,
+                "motion": None,
             }
 
         self.n_photoreceptors = len(coords)
@@ -156,6 +157,7 @@ class RetinaFrontEnd:
         for eye in self.eyes.values():
             eye["bank"].reset(1)
             eye["adapt"] = None
+            eye["motion"] = None
 
     # ------------------------------------------------------------------
     def prepare_frame(self, frame: np.ndarray) -> np.ndarray:
@@ -187,6 +189,7 @@ class RetinaFrontEnd:
             if self.cfg.motion_mode == "off":
                 continue
             motion = eye["bank"].step(intensity[None, :], dt)[0]  # (n_facets, ch)
+            eye["motion"] = motion
             motion_parts.append(motion)
 
         if self.cfg.motion_mode == "retinotopic":
@@ -214,11 +217,17 @@ class RetinaFrontEnd:
 
     # ------------------------------------------------------------------
     def mean_flow(self) -> dict[str, np.ndarray]:
-        """Last frame's mean optic flow per eye (diagnostics / reward shaping)."""
-        out = {}
+        """Last frame's mean optic flow per eye, as a 2-D vector in eye
+        coordinates.  Diagnostics and reward shaping; zero before the first
+        :meth:`process` call and whenever motion is switched off."""
+        out: dict[str, np.ndarray] = {}
         for side, eye in self.eyes.items():
             bank: ReichardtBank = eye["bank"]
-            out[side] = bank.mean_flow(np.zeros((1, len(eye["slots"]), bank.n_channels)))[0]
+            motion = eye["motion"]
+            if motion is None:
+                out[side] = np.zeros(2)
+            else:
+                out[side] = bank.mean_flow(motion[None, ...])[0]
         return out
 
     def describe(self) -> str:

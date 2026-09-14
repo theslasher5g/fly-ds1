@@ -101,3 +101,31 @@ def test_reichardt_channel_count():
     axial, _ = hex_lattice(rings=2)
     assert ReichardtBank(axial, ReichardtConfig(on_off_split=True)).n_channels == 6
     assert ReichardtBank(axial, ReichardtConfig(on_off_split=False)).n_channels == 3
+
+
+def test_mean_flow_follows_the_stimulus(network):
+    """Regression: mean_flow used to average an array of zeros and always
+    report no motion at all."""
+    from flyds1.vision.frontend import FrontEndConfig, RetinaFrontEnd
+    from flyds1.vision.ommatidia import ScreenGeometry
+
+    front_end = RetinaFrontEnd(
+        network, FrontEndConfig(screen=ScreenGeometry(160, 90, 90.0), motion_mode="retinotopic")
+    )
+    assert all(np.allclose(v, 0) for v in front_end.mean_flow().values())
+
+    def bar(x0):
+        frame = np.zeros((90, 160))
+        frame[:, max(0, x0) : x0 + 20] = 1.0
+        return frame
+
+    for x in range(0, 140, 5):  # rightward
+        front_end.process(bar(x), 1 / 60)
+    rightward = np.mean([v[0] for v in front_end.mean_flow().values()])
+
+    front_end.reset()
+    for x in range(140, 0, -5):  # leftward
+        front_end.process(bar(x), 1 / 60)
+    leftward = np.mean([v[0] for v in front_end.mean_flow().values()])
+
+    assert rightward > 0 > leftward
