@@ -58,3 +58,46 @@ def test_stats_formatting():
 def test_page_refresh_interval_is_embedded(tmp_path):
     LiveView(tmp_path, refresh_ms=123)
     assert "123" in (tmp_path / "index.html").read_text()
+
+
+def test_atomic_replace_tolerates_a_locked_target(tmp_path, monkeypatch):
+    """Regression: Windows raises PermissionError when the HTTP server's GET
+    handler has the target file open at the moment of replace(); a dropped
+    viewer frame must not crash the run producing it."""
+    from pathlib import Path
+
+    view = LiveView(tmp_path)
+    tmp = tmp_path / "src.txt"
+    tmp.write_text("data")
+    dest = tmp_path / "dst.txt"
+
+    calls = {"n": 0}
+    real_replace = Path.replace
+
+    def flaky_replace(self, target):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise PermissionError("simulated: target is open elsewhere")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", flaky_replace)
+    view._atomic_replace(tmp, dest, attempts=5, delay=0.0)
+    assert dest.read_text() == "data"
+    assert calls["n"] == 3
+
+
+def test_atomic_replace_gives_up_quietly_when_always_locked(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    view = LiveView(tmp_path)
+    tmp = tmp_path / "src.txt"
+    tmp.write_text("data")
+    dest = tmp_path / "dst.txt"
+
+    def always_locked(self, target):
+        raise PermissionError("simulated: permanently open")
+
+    monkeypatch.setattr(Path, "replace", always_locked)
+    view._atomic_replace(tmp, dest, attempts=3, delay=0.0)  # must not raise
+    assert not dest.exists()
+    assert tmp.exists()  # left in place so the next update overwrites it

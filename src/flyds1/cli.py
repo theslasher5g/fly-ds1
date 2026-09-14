@@ -31,9 +31,10 @@ from flyds1.config import ExperimentConfig
 # helpers
 # ---------------------------------------------------------------------------
 def _load_config(args) -> ExperimentConfig:
-    cfg = ExperimentConfig.from_yaml(args.config) if args.config else ExperimentConfig()
+    config_path = getattr(args, "config", None)
+    cfg = ExperimentConfig.from_yaml(config_path) if config_path else ExperimentConfig()
     overrides = {}
-    for item in args.set or []:
+    for item in getattr(args, "set", None) or []:
         key, _, value = item.partition("=")
         if not value:
             raise SystemExit(f"--set expects key=value, got {item!r}")
@@ -607,42 +608,69 @@ def cmd_play(args) -> int:
 
 
 # ---------------------------------------------------------------------------
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="flyds1", description=__doc__.splitlines()[0])
-    parser.add_argument("--config", type=Path, help="experiment YAML (defaults to built-in values)")
-    parser.add_argument(
-        "--set", action="append", metavar="KEY=VALUE",
+def _common_options() -> argparse.ArgumentParser:
+    """``--config`` and ``--set``, accepted on either side of the subcommand.
+
+    argparse puts global options before the subcommand, which is not how anyone
+    types them: ``flyds1 live --set x=1`` is the natural form and used to fail
+    with "unrecognized arguments".  Attaching the same options to every
+    subparser with SUPPRESS defaults makes both orders work: put every
+    ``--set`` on whichever side reads naturally.  Mixing sides in one command
+    does not merge -- argparse's subparser dispatch re-parses into a fresh
+    namespace and copies it wholesale over the top-level one, so ``--set``
+    given after the subcommand replaces (not adds to) any given before it.
+    """
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "--config", type=Path, default=argparse.SUPPRESS,
+        help="experiment YAML (defaults to built-in values)",
+    )
+    common.add_argument(
+        "--set", action="append", metavar="KEY=VALUE", default=argparse.SUPPRESS,
         help="override a config value, e.g. --set connectome.spec=synthetic:rings=8",
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    return common
 
-    sub.add_parser("doctor", help="report which optional dependencies are installed").set_defaults(
-        func=cmd_doctor
+
+def build_parser() -> argparse.ArgumentParser:
+    common = _common_options()
+    parser = argparse.ArgumentParser(
+        prog="flyds1", description=__doc__.splitlines()[0], parents=[common]
     )
-    sub.add_parser("fetch", help="print how to download a real connectome").set_defaults(
-        func=cmd_fetch
-    )
-    p_build = sub.add_parser("build", help="build the wired network")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub_kwargs = {"parents": [common]}
+
+    sub.add_parser(
+        "doctor", help="report which optional dependencies are installed", **sub_kwargs
+    ).set_defaults(func=cmd_doctor)
+    sub.add_parser(
+        "fetch", help="print how to download a real connectome", **sub_kwargs
+    ).set_defaults(func=cmd_fetch)
+    p_build = sub.add_parser("build", help="build the wired network", **sub_kwargs)
     p_build.add_argument("--out", type=Path, help="save the network as .npz")
     p_build.set_defaults(func=cmd_build)
 
-    sub.add_parser("info", help="summarise network, retina and encoder").set_defaults(func=cmd_info)
+    sub.add_parser(
+        "info", help="summarise network, retina and encoder", **sub_kwargs
+    ).set_defaults(func=cmd_info)
 
-    p_self = sub.add_parser("selftest", help="run every pipeline step once with checks")
+    p_self = sub.add_parser(
+        "selftest", help="run every pipeline step once with checks", **sub_kwargs
+    )
     p_self.add_argument("--png", type=Path, help="also write diagnostic images to this directory")
     p_self.set_defaults(func=cmd_selftest)
 
-    p_cal = sub.add_parser("calibrate", help="check HUD regions and field of view on a frame")
+    p_cal = sub.add_parser("calibrate", help="check HUD regions and field of view on a frame", **sub_kwargs)
     p_cal.add_argument("--frame", required=True, help="a screenshot (png/jpg) or .npy frame")
     p_cal.add_argument("--out", help="annotated image to write (default calibration.png)")
     p_cal.set_defaults(func=cmd_calibrate)
 
-    p_watch = sub.add_parser("watch", help="run the brain over recorded footage")
+    p_watch = sub.add_parser("watch", help="run the brain over recorded footage", **sub_kwargs)
     p_watch.add_argument("--frames", required=True, help="folder of frames or .npy stack")
     p_watch.add_argument("--png", help="write diagnostic panels to this directory")
     p_watch.set_defaults(func=cmd_watch)
 
-    p_live = sub.add_parser("live", help="watch the agent play in a browser")
+    p_live = sub.add_parser("live", help="watch the agent play in a browser", **sub_kwargs)
     p_live.add_argument("--model", help="trained model .zip (random actions if omitted)")
     p_live.add_argument("--port", type=int, default=8000)
     p_live.add_argument("--out", help="directory for the viewer files (default ./live)")
@@ -654,19 +682,19 @@ def build_parser() -> argparse.ArgumentParser:
                         help="boss env: do not play the run-back macro")
     p_live.set_defaults(func=cmd_live)
 
-    sub.add_parser("budget", help="real-time arithmetic of a boss-fight run").set_defaults(
-        func=cmd_budget
-    )
+    sub.add_parser(
+        "budget", help="real-time arithmetic of a boss-fight run", **sub_kwargs
+    ).set_defaults(func=cmd_budget)
 
-    p_tune = sub.add_parser("tune", help="sweep the recurrent gain")
+    p_tune = sub.add_parser("tune", help="sweep the recurrent gain", **sub_kwargs)
     p_tune.add_argument("--gains", type=float, nargs="+", help="gains to try")
     p_tune.set_defaults(func=cmd_tune)
 
-    p_train = sub.add_parser("train", help="train with PPO")
+    p_train = sub.add_parser("train", help="train with PPO", **sub_kwargs)
     p_train.add_argument("--timesteps", type=int, help="override training.total_timesteps")
     p_train.set_defaults(func=cmd_train)
 
-    p_play = sub.add_parser("play", help="roll out a policy")
+    p_play = sub.add_parser("play", help="roll out a policy", **sub_kwargs)
     p_play.add_argument("--model", type=Path, help="trained model .zip (random policy if omitted)")
     p_play.add_argument("--episodes", type=int, default=3)
     p_play.add_argument("--seed", type=int, default=0)
