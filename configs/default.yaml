@@ -78,6 +78,7 @@ env:
     reward_damage: 0.2
     reward_death: 10.0
     reward_wall_bump: 0.05
+    wall_brightness: 0.35
     target_radius: 1.5
     reward_target: 5.0
     reward_approach: 1.0
@@ -91,6 +92,7 @@ env:
       height: 720
       monitor: 1
     frame_source: dummy
+    replay_path: null
     input_backend: dry
     window_name: null
     dry_run: true
@@ -108,6 +110,66 @@ env:
       progress: 0.5
       death: 5.0
       boss_kill: 20.0
+  boss:
+    capture:
+      left: 0
+      top: 0
+      width: 1280
+      height: 720
+      monitor: 1
+    frame_source: dummy
+    replay_path: null
+    input_backend: dry
+    window_name: null
+    dry_run: true
+    target_fps: 30.0
+    action_repeat: 4
+    frame_width: 320
+    frame_height: 180
+    max_fight_steps: 900
+    max_wait_steps: 600
+    wait_after_death_s: 12.0
+    runback:
+      steps:
+      - - - forward
+        - 4.0
+      - - []
+        - 0.5
+      - - - forward
+        - 3.0
+      name: placeholder run-back
+    enter_fog:
+      steps:
+      - - - forward
+        - 2.0
+      name: through the fog gate
+    detectors:
+      player_hp:
+        x0: 0.035
+        y0: 0.045
+        x1: 0.245
+        y1: 0.062
+      boss_hp:
+        x0: 0.255
+        y0: 0.885
+        x1: 0.745
+        y1: 0.9
+      death_screen:
+        x0: 0.15
+        y0: 0.4
+        x1: 0.85
+        y1: 0.6
+      boss_bar_present: 0.005
+      confirm_frames: 3
+      boss_dead_below: 0.08
+      death_max_brightness: 0.22
+      death_min_redness: 1.6
+    reward:
+      boss_damage: 20.0
+      player_damage: 5.0
+      kill: 50.0
+      death: 10.0
+      survival: 0.005
 training:
   total_timesteps: 200000
   n_envs: 4
