@@ -123,3 +123,35 @@ def test_cli_play_with_random_policy(capsys):
 def test_cli_reports_bad_overrides(capsys):
     assert _cli("--set", "connectome.nope=1", "info") == 2
     assert "error" in capsys.readouterr().err
+
+
+def test_pipeline_assembles_the_game_environment():
+    """The real-game path, exercised against the dummy screen capture."""
+    from flyds1.pipeline import action_spec_for, build_network, make_env
+
+    cfg = small_config().apply_overrides(
+        {
+            "env.kind": "game",
+            "env.game.frame_source": "dummy",
+            "env.game.target_fps": 10_000,
+            "env.game.frame_width": 96,
+            "env.game.frame_height": 54,
+            "env.game.max_steps": 6,
+            "env.game.dry_run": True,
+        }
+    )
+    network = build_network(cfg)
+    env, layout = make_env(cfg, network, seed=0)
+    obs, _ = env.reset(options={"skip_wait": True})
+    assert obs.shape == (cfg.env.stack_k, layout.size)
+
+    spec = action_spec_for(cfg)
+    assert spec.size == 11  # the Dark Souls bindings, not the arena's four
+    action = np.zeros(spec.size, dtype=np.float32)
+    action[0] = 1.0
+    while True:
+        obs, reward, terminated, truncated, info = env.step(action)
+        if terminated or truncated:
+            break
+    assert info["dry_run"] is True
+    assert np.isfinite(obs).all()

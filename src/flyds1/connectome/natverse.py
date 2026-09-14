@@ -13,7 +13,7 @@ Set up once:
 
 from __future__ import annotations
 
-from typing import Iterable, Sequence
+from typing import Sequence
 
 import numpy as np
 
@@ -28,11 +28,13 @@ _INSTALL_HINT = (
 
 
 def _require_fafbseg():
-    try:
-        import fafbseg  # noqa: F401
-        import pandas  # noqa: F401
-    except ImportError as exc:  # pragma: no cover - optional dependency
-        raise ImportError(_INSTALL_HINT) from exc
+    import importlib.util
+
+    missing = [m for m in ("fafbseg", "pandas") if importlib.util.find_spec(m) is None]
+    if missing:  # pragma: no cover - optional dependency
+        raise ImportError(f"{_INSTALL_HINT} (missing: {', '.join(missing)})")
+    import fafbseg
+
     return fafbseg
 
 
@@ -74,8 +76,6 @@ def connectome_from_frames(annotations, edges, *, spacing_deg: float = 5.0) -> C
     you obtained any other way -- a ``navis`` NeuronList, an R ``natverse``
     export written to feather, a cached parquet file.
     """
-    import pandas as pd  # noqa: F401  (import guarded by caller)
-
     def pick(frame, *names, default=None):
         for name in names:
             if name in frame.columns:

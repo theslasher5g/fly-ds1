@@ -7,6 +7,8 @@ at the raw frames any time by dropping the wrapper.
 
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 
 from flyds1.connectome.graph import WiredNetwork
@@ -57,8 +59,17 @@ class RetinaWrapper(gym.Wrapper):
         if len(frame_shape) < 2:
             raise ValueError(f"expected a frame observation, got shape {frame_shape}")
         # The retina's screen geometry must match the frames it will be fed.
-        cfg.screen = type(cfg.screen)(
-            width=int(frame_shape[1]), height=int(frame_shape[0]), fov_h_deg=cfg.screen.fov_h_deg
+        # Copy rather than assign: the config passed in is usually the caller's
+        # long-lived ExperimentConfig.frontend, and silently resizing their
+        # screen from inside a wrapper is the kind of side effect that surfaces
+        # three envs later.
+        cfg = dataclasses.replace(
+            cfg,
+            screen=type(cfg.screen)(
+                width=int(frame_shape[1]),
+                height=int(frame_shape[0]),
+                fov_h_deg=cfg.screen.fov_h_deg,
+            ),
         )
         self.front_end = RetinaFrontEnd(network, cfg)
         self.dt = float(dt if dt is not None else self._infer_dt(env))

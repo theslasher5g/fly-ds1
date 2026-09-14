@@ -13,7 +13,7 @@ holding block or run matters as much as tapping attack.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)

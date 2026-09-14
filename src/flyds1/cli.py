@@ -128,7 +128,7 @@ def cmd_info(args) -> int:
 def cmd_selftest(args) -> int:
     """Run every step once, offline, with numeric checks on each."""
     from flyds1.net.reference import RateNetwork
-    from flyds1.pipeline import action_spec_for, build_network, make_env, make_frame_env
+    from flyds1.pipeline import action_spec_for, build_network, make_env
     from flyds1.vision.encoder import build_encoder_wiring, encode_numpy
 
     cfg = _load_config(args)
@@ -149,7 +149,6 @@ def cmd_selftest(args) -> int:
     check("spectral radius below 2", radius < 2.0, f"{radius:.3f}")
 
     print("step 3: screen -> eye -> motion")
-    frame_env = make_frame_env(cfg, seed=0)
     env, layout = make_env(cfg, net, seed=0)
     obs, _ = env.reset(seed=0)
     check("observation finite", bool(np.isfinite(np.asarray(obs)).all()))

@@ -17,8 +17,6 @@ not part of the animal, and starving it only makes the gradient noisier.
 
 from __future__ import annotations
 
-import numpy as np
-
 from flyds1.connectome.graph import WiredNetwork
 from flyds1.net.dynamics import RateConfig
 from flyds1.net.rate_rnn import ConnectomeRNN, TrainableParts, require_torch

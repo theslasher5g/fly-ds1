@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from flyds1.hexlattice import HEX_AXES, axial_to_cartesian, hex_lattice, neighbour_pairs
+from flyds1.hexlattice import HEX_AXES, hex_lattice, neighbour_pairs
 from flyds1.connectome.retinotopy import eye_coords_from_soma, snap_to_hex_lattice
 from flyds1.vision.ommatidia import OmmatidiaSampler, ScreenGeometry, luminance, resize_nearest
 from flyds1.vision.reichardt import ReichardtBank, ReichardtConfig

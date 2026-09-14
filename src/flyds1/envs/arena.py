@@ -220,7 +220,6 @@ class FlyArenaEnv(gym.Env):
 
     def _cast(self, angles: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Vectorised DDA: distance and surface shade per ray."""
-        cfg = self.cfg
         n = len(angles)
         dx, dy = np.cos(angles), np.sin(angles)
         map_x = np.full(n, int(self.pos[0]))
@@ -264,22 +263,21 @@ class FlyArenaEnv(gym.Env):
         return np.maximum(dist, 1e-3), np.clip(shade - stripe, 0.05, 1.0)
 
     def _draw_enemy(self, frame: np.ndarray, wall_perp: np.ndarray) -> None:
-        cfg = self.cfg
         rel = self.enemy - self.pos
         dist = float(np.linalg.norm(rel))
         if dist < 1e-3:
             return
         bearing = np.arctan2(rel[1], rel[0]) - self.angle
         bearing = (bearing + np.pi) % (2 * np.pi) - np.pi
-        if abs(bearing) > np.deg2rad(cfg.fov_h_deg) / 2 + 0.3:
+        if abs(bearing) > np.deg2rad(self.cfg.fov_h_deg) / 2 + 0.3:
             return
-        cx = cfg.width / 2.0 + np.tan(bearing) * self.focal
-        size = np.clip(cfg.height * 0.8 / dist, 3, cfg.height)
+        cx = self.cfg.width / 2.0 + np.tan(bearing) * self.focal
+        size = np.clip(self.cfg.height * 0.8 / dist, 3, self.cfg.height)
         x0, x1 = int(cx - size / 2), int(cx + size / 2)
-        y0 = int(cfg.height / 2.0 - size / 2)
-        y1 = int(cfg.height / 2.0 + size / 2)
-        xs = np.arange(max(0, x0), min(cfg.width, x1 + 1))
-        ys = np.arange(max(0, y0), min(cfg.height, y1 + 1))
+        y0 = int(self.cfg.height / 2.0 - size / 2)
+        y1 = int(self.cfg.height / 2.0 + size / 2)
+        xs = np.arange(max(0, x0), min(self.cfg.width, x1 + 1))
+        ys = np.arange(max(0, y0), min(self.cfg.height, y1 + 1))
         if len(xs) == 0 or len(ys) == 0:
             return
         visible = xs[dist < wall_perp[xs]]  # occluded by walls in front

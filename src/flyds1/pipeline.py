@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
-
 from flyds1.config import ExperimentConfig
 from flyds1.connectome.graph import WiredNetwork, build_wired_network
 from flyds1.connectome.loader import load_connectome

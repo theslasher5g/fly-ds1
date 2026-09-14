@@ -27,7 +27,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from flyds1.connectome.schema import Connectome, NeuronTable, SynapseTable
-from flyds1.hexlattice import HEX_AXES, axial_to_cartesian, hex_lattice, neighbour_pairs
+from flyds1.hexlattice import HEX_AXES, hex_lattice, neighbour_pairs
 
 #: Per-column cell types with their neurotransmitter.  Signs come from the
 #: transmitter alone (Dale's law), exactly as in the real pipeline.
