@@ -1,0 +1,10 @@
+# Core (always needed, pure CPU, no heavy deps)
+numpy>=1.24
+scipy>=1.10
+pyyaml>=6.0
+
+# Everything below is optional -- install per pipeline step, see README.
+# pip install -e ".[torch,rl]"         # step 2 + 6
+# pip install -e ".[connectome]"       # step 1 (real FlyWire/Codex data)
+# pip install -e ".[game]"             # step 4 + 5 (screen capture, key injection)
+# pip install -e ".[spiking]"          # step 2, Brian2 alternative

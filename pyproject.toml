@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flyds1"
+version = "0.1.0"
+description = "Connectome-constrained Drosophila brain model playing Dark Souls"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# Step 2: differentiable rate network + RL training
+torch = ["torch>=2.1"]
+rl = ["gymnasium>=0.29", "stable-baselines3>=2.2"]
+# Step 1: real connectome ingestion (natverse ecosystem)
+connectome = ["pandas>=2.0", "navis>=1.5", "fafbseg>=3.0", "requests>=2.31"]
+# Step 4/5: screen capture + input injection against the running game
+game = ["mss>=9.0", "pydirectinput>=1.0.4; sys_platform == 'win32'"]
+# Optional biophysical path (step 2, spiking)
+spiking = ["brian2>=2.5"]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+flyds1 = "flyds1.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
