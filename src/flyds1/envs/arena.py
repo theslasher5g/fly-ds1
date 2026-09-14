@@ -131,6 +131,13 @@ class ArenaConfig:
     reward_wall_bump: float = 0.05
 
     # target task
+    #: Wall brightness multiplier.  The target task dims the walls: a fly
+    #: separates a small figure from a textured background with dedicated
+    #: small-object detectors (LC11/LC18), which a connectome stand-in without
+    #: them does not have, and this benchmark is meant to test see-and-steer,
+    #: not figure-ground segregation.  Walls stay textured, so optic flow
+    #: survives -- they are just no longer brighter than the thing to steer at.
+    wall_brightness: float = 1.0
     target_radius: float = 1.5         # how close counts as reached
     reward_target: float = 5.0         # per target reached
     reward_approach: float = 1.0       # per tile of distance closed
@@ -143,6 +150,8 @@ class ArenaConfig:
             raise ValueError(f"task must be 'survive' or 'target', got {self.task!r}")
         if self.tile_map is None:
             self.tile_map = tuple(OPEN_MAP if self.task == "target" else DEFAULT_MAP)
+            if self.task == "target":
+                self.wall_brightness = min(self.wall_brightness, 0.35)
         else:
             self.tile_map = tuple(self.tile_map)
 
@@ -291,7 +300,7 @@ class FlyArenaEnv(gym.Env):
         top = horizon - heights / 2.0
         bottom = horizon + heights / 2.0
         wall_mask = (rows >= top) & (rows <= bottom)
-        brightness = shades / (1.0 + 0.25 * perp)
+        brightness = self.cfg.wall_brightness * shades / (1.0 + 0.25 * perp)
         frame[:] = np.where(wall_mask, brightness, 0.0)
         # floor gets a gradient so looking down is not featureless
         floor = np.clip((rows - horizon) / horizon, 0, 1) * 0.12

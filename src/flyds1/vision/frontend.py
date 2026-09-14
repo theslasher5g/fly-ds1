@@ -153,6 +153,26 @@ class RetinaFrontEnd:
         """Fraction of each eye's facets that can see the monitor."""
         return {side: eye["sampler"].coverage() for side, eye in self.eyes.items()}
 
+    def screen_coverage(self) -> float:
+        """Fraction of the screen's width the retina actually samples.
+
+        The complement of :meth:`coverage`, and the one that bites: a small eye
+        aimed at a wide monitor has *every* facet on screen (coverage 1.0) while
+        seeing only the middle third of it. Measured here on an eye of 74
+        photoreceptors against a 90 deg screen: 58%, i.e. anything the agent
+        should steer towards spent most of its time outside the visual field.
+        """
+        centres = np.concatenate(
+            [eye["sampler"].facet_pixel_centres()[:, 0] for eye in self.eyes.values()]
+        )
+        centres = centres[np.isfinite(centres)]
+        if len(centres) == 0:
+            return 0.0
+        width = float(self.cfg.screen.width)
+        left = max(0.0, float(centres.min()))
+        right = min(width, float(centres.max()))
+        return max(0.0, (right - left) / width)
+
     def reset(self) -> None:
         for eye in self.eyes.values():
             eye["bank"].reset(1)
@@ -232,11 +252,14 @@ class RetinaFrontEnd:
 
     def describe(self) -> str:
         cov = ", ".join(f"{s}={v:.0%}" for s, v in sorted(self.coverage().items()))
+        screen = self.screen_coverage()
+        warning = "  <- the retina sees only part of the screen\n" if screen < 0.9 else "\n"
         return (
             f"RetinaFrontEnd: {self.n_photoreceptors} photoreceptors over {len(self.eyes)} eyes, "
             f"screen {self.cfg.screen.width}x{self.cfg.screen.height} "
             f"({self.cfg.screen.fov_h_deg:.0f}x{self.cfg.screen.fov_v_deg:.0f} deg)\n"
-            f"  screen coverage per eye: {cov}\n"
+            f"  facets that see the screen: {cov}\n"
+            f"  screen width covered by the retina: {screen:.0%}" + warning +
             f"  motion: {self.cfg.motion_mode} "
             f"({self.n_motion_channels} channels/facet) -> obs size {self.obs_size}"
         )

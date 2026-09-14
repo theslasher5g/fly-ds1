@@ -9,10 +9,15 @@ connectome with the *structure* the rest of the pipeline relies on:
 * the ON/OFF pathways and the T4/T5 input motif (Mi9- / Mi1+ / Mi4- offset by
   one column), so direction selectivity is a property of the *wiring* rather
   than something the encoder has to be taught;
-* lobula plate tangential cells (HS/VS) and looming detectors (LC4/LPLC2)
-  pooling those motion signals;
+* lobula plate tangential cells (HS/VS) pooling motion over the whole eye, and
+  looming detectors (LC4/LPLC2) whose receptive fields **tile** the visual field
+  in overlapping, spatially contiguous patches -- the property that lets the
+  central brain know *where* something is, and the one this generator originally
+  got wrong (see :func:`tile_receptive_fields`);
 * a recurrent central brain;
-* descending neurons as the single motor output bottleneck (step 5).
+* descending neurons as the single motor output bottleneck (step 5), each with
+  **direct, retinotopically organised input from the lobula cells** on top of
+  its central-brain input -- see :func:`_wire_descending`.
 
 The numbers are plausible, not measured.  Anything quantitative you conclude
 from a synthetic connectome is a statement about this generator, not about
@@ -75,8 +80,13 @@ class SyntheticConfig:
     n_descending: int = 24
     n_lc4: int = 8
     n_lplc2: int = 8
+    #: Fraction of a lobula cell's receptive field that overlaps its neighbours.
+    lc_overlap: float = 0.35
     central_in_degree: int = 16
     dn_in_degree: int = 24
+    #: Lobula cells feeding each descending neuron directly, chosen by how close
+    #: their receptive fields sit to that neuron's preferred azimuth.
+    dn_visual_in_degree: int = 5
     feedback_edges: int = 200
     seed: int = 0
 
@@ -89,6 +99,14 @@ class SyntheticConfig:
     w_pooling: float = 8.0
     w_central: float = 12.0
     w_descending: float = 15.0
+    #: Direct visual input to a descending neuron.  Large on purpose: measured
+    #: on this generator, a DN driven only through the random central brain
+    #: carries no decodable information about where anything is (a linear probe
+    #: on the DN population predicts a steering oracle at the majority-class
+    #: baseline, 0.89 against 0.88).  Real descending neurons are not wired that
+    #: way -- steering and escape DNs take strong, direct projection-neuron
+    #: input -- and without it no read-out can steer, whatever it is trained on.
+    w_descending_visual: float = 60.0
 
 
 class _Builder:
@@ -155,6 +173,89 @@ class _Builder:
             side=np.array(self.side, dtype=object),
             eye_coord=np.array(self.eye_coord, dtype=float),
         )
+
+
+def tile_receptive_fields(
+    coords: np.ndarray,
+    n_cells: int,
+    *,
+    axis: int = 0,
+    overlap: float = 0.35,
+) -> list[np.ndarray]:
+    """Split the retina into ``n_cells`` overlapping, contiguous patches.
+
+    Why this matters, measured: with each cell instead pooling a *random
+    scatter* of columns (the generator's first version), every LC cell reports
+    the same global average, retinotopy dies at the lobula, and the descending
+    neurons carry no information about where anything is.  A linear probe on
+    the DN rates then predicts a steering oracle's actions at exactly the
+    majority-class baseline (0.884 against 0.880), while the same probe on the
+    retinal input reaches 0.934.  Real LC neurons have localised, overlapping
+    receptive fields that tile the eye; so do these.
+
+    ``axis`` selects the coordinate the patches tile along (0 = azimuth,
+    1 = elevation); ``overlap`` is the fraction of a patch's width that extends
+    into each neighbour.
+    """
+    coords = np.asarray(coords, dtype=float)
+    n_cells = max(1, int(n_cells))
+    order = np.argsort(coords[:, axis], kind="stable")
+    bounds = np.linspace(0, len(order), n_cells + 1).astype(int)
+    span = max(1, int(overlap * len(order) / n_cells))
+    fields = []
+    for k in range(n_cells):
+        start = max(0, bounds[k] - span)
+        stop = min(len(order), bounds[k + 1] + span)
+        fields.append(order[start:stop])
+    return fields
+
+
+def _wire_descending(
+    b: "_Builder",
+    cfg: SyntheticConfig,
+    rng: np.random.Generator,
+    central: np.ndarray,
+    vpn_ids: np.ndarray,
+    coords: np.ndarray,
+) -> np.ndarray:
+    """Create the descending neurons and wire them up.
+
+    Each one gets a *preferred azimuth*, tiled across the visual field, and
+    takes strong direct input from the lobula cells looking that way, plus
+    weaker input from a random slice of the central brain.  The direct pathway
+    is the load-bearing part: with central input alone the descending population
+    is a blender -- every neuron receives ~10% of its drive from vision, through
+    random signs, and what is left after two rounds of averaging no longer says
+    where anything is.
+    """
+    n_dn = cfg.n_descending
+    azimuths = np.linspace(coords[:, 0].min(), coords[:, 0].max(), n_dn)
+    vpn_azimuth = np.array([b.eye_coord[b.ids.index(int(v))][0] for v in vpn_ids], dtype=float)
+
+    descending = []
+    for i, preferred in enumerate(azimuths):
+        side = "left" if preferred < 0 else "right"
+        dn = b.add(f"dn{i:02d}", "descending", "acetylcholine", side, (float(preferred), 0.0))
+        descending.append(dn)
+        for pre in rng.choice(central, size=cfg.dn_in_degree, replace=False):
+            b.connect(int(pre), int(dn), cfg.w_descending)
+        # the direct visual pathway: the lobula cells looking this way
+        distance = np.where(np.isfinite(vpn_azimuth), np.abs(vpn_azimuth - preferred), np.inf)
+        nearest = np.argsort(distance)[: cfg.dn_visual_in_degree]
+        for k in nearest:
+            if np.isfinite(distance[k]):
+                b.connect(int(vpn_ids[k]), int(dn), cfg.w_descending_visual)
+        # plus one wide-field tangential cell, for self-motion context
+        wide = [v for v, a in zip(vpn_ids, vpn_azimuth) if not np.isfinite(a)]
+        if wide:
+            b.connect(int(rng.choice(wide)), int(dn), cfg.w_descending)
+    return np.array(descending, dtype=np.int64)
+
+
+def _field_centres(coords: np.ndarray, n_cells: int, axis: int, overlap: float) -> np.ndarray:
+    """Gaze direction of each tiled receptive field, for the neuron table."""
+    fields = tile_receptive_fields(coords, n_cells, axis=axis, overlap=overlap)
+    return np.stack([coords[field].mean(axis=0) for field in fields])
 
 
 def _step(axial: np.ndarray, axis: int, sign: int) -> np.ndarray:
@@ -261,17 +362,27 @@ def build_synthetic_connectome(cfg: SyntheticConfig | None = None) -> Connectome
 
         # LC4 / LPLC2: looming-sensitive, pool all directions over a patch.
         proj: dict[str, np.ndarray] = {}
-        for name, n_cells in (("lc4", cfg.n_lc4), ("lplc2", cfg.n_lplc2)):
+        # LC4 tiles azimuth, LPLC2 tiles elevation: between them the central
+        # brain can tell left from right and up from down.
+        for name, n_cells, tile_axis in (("lc4", cfg.n_lc4, 0), ("lplc2", cfg.n_lplc2, 1)):
             ids = np.array(
-                [b.add(name, "visual_projection", "acetylcholine", side, None) for _ in range(n_cells)],
+                [
+                    b.add(name, "visual_projection", "acetylcholine", side, tuple(centre))
+                    for centre in _field_centres(coords, n_cells, tile_axis, cfg.lc_overlap)
+                ],
                 dtype=np.int64,
             )
-            patches = np.array_split(rng.permutation(n_col), n_cells)
-            for cell, patch in zip(ids, patches):
-                for k in patch:
+            fields = tile_receptive_fields(
+                coords, n_cells, axis=tile_axis, overlap=cfg.lc_overlap
+            )
+            for cell, field in zip(ids, fields):
+                for k in field:
                     for sub in DIRECTION_SUBTYPES:
                         b.connect(per_type[f"t4{sub}"][k], cell, cfg.w_pooling)
                         b.connect(per_type[f"t5{sub}"][k], cell, cfg.w_pooling)
+                    # a localised cell also reads the columnar pathway directly,
+                    # so it responds to a static target, not only to motion
+                    b.connect(per_type["tm1"][k], cell, cfg.w_pooling)
             proj[name] = ids
         projection[side] = proj
 
@@ -308,19 +419,7 @@ def build_synthetic_connectome(cfg: SyntheticConfig | None = None) -> Connectome
             b.connect(int(pre), int(post), cfg.w_central)
 
     # ---- descending neurons: the motor bottleneck ---------------------
-    descending = np.array(
-        [
-            b.add(f"dn{i:02d}", "descending", "acetylcholine", str(rng.choice(["left", "right"])), None)
-            for i in range(cfg.n_descending)
-        ],
-        dtype=np.int64,
-    )
-    for dn in descending:
-        for pre in rng.choice(central, size=cfg.dn_in_degree, replace=False):
-            b.connect(int(pre), int(dn), cfg.w_descending)
-        # direct looming -> escape and tangential -> steering shortcuts
-        for pre in rng.choice(vpn_ids, size=4, replace=False):
-            b.connect(int(pre), int(dn), cfg.w_descending)
+    _wire_descending(b, cfg, rng, central, vpn_ids, coords)
 
     # ---- central feedback into the optic lobe -------------------------
     optic_targets = np.concatenate(
@@ -353,6 +452,7 @@ def synthetic_neighbour_pairs(cfg: SyntheticConfig | None = None) -> dict[int, n
 
 __all__ = [
     "COLUMNAR_TYPES",
+    "tile_receptive_fields",
     "DIRECTION_SUBTYPES",
     "TANGENTIAL_CELLS",
     "SyntheticConfig",

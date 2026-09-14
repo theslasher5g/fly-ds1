@@ -9,6 +9,9 @@ from flyds1.plotting import facet_image, filmstrip, save_png, to_uint8
 
 SMALL = {
     "connectome.spec": "synthetic:rings=2",
+    # a 2-ring eye spans +-10 deg per eye; the screen has to match or the agent
+    # sees only the middle of it (which the selftest now checks for)
+    "frontend.screen.fov_h_deg": 45.0,
     "env.arena.width": 96,
     "env.arena.height": 54,
     "env.arena.max_steps": 40,

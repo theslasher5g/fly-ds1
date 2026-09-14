@@ -129,3 +129,19 @@ def test_mean_flow_follows_the_stimulus(network):
     leftward = np.mean([v[0] for v in front_end.mean_flow().values()])
 
     assert rightward > 0 > leftward
+
+
+def test_screen_coverage_reports_a_small_retina(network):
+    """Regression: 'every facet is on screen' hid that the eye saw a third of it."""
+    from flyds1.vision.frontend import FrontEndConfig, RetinaFrontEnd
+    from flyds1.vision.ommatidia import ScreenGeometry
+
+    narrow = RetinaFrontEnd(
+        network, FrontEndConfig(screen=ScreenGeometry(160, 90, 30.0), motion_mode="off")
+    )
+    wide = RetinaFrontEnd(
+        network, FrontEndConfig(screen=ScreenGeometry(160, 90, 150.0), motion_mode="off")
+    )
+    assert narrow.screen_coverage() == pytest.approx(1.0, abs=0.05)
+    assert wide.screen_coverage() < 0.6
+    assert "screen width covered by the retina" in wide.describe()

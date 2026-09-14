@@ -149,6 +149,15 @@ def cmd_selftest(args) -> int:
     check("spectral radius below 2", radius < 2.0, f"{radius:.3f}")
 
     print("step 3: screen -> eye -> motion")
+    from flyds1.pipeline import make_front_end
+
+    front_end = make_front_end(cfg, net)
+    check(
+        "retina covers the screen",
+        front_end.screen_coverage() > 0.9,
+        f"{front_end.screen_coverage():.0%} of the screen width "
+        f"(raise connectome rings, or lower frontend.screen.fov_h_deg)",
+    )
     env, layout = make_env(cfg, net, seed=0)
     obs, _ = env.reset(seed=0)
     check("observation finite", bool(np.isfinite(np.asarray(obs)).all()))
