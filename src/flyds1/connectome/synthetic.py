@@ -32,7 +32,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from flyds1.connectome.schema import Connectome, NeuronTable, SynapseTable
-from flyds1.hexlattice import HEX_AXES, hex_lattice, neighbour_pairs
+from flyds1.hexlattice import HEX_AXES, axial_ring_indices, hex_lattice, neighbour_pairs
 
 #: Per-column cell types with their neurotransmitter.  Signs come from the
 #: transmitter alone (Dale's law), exactly as in the real pipeline.
@@ -76,8 +76,21 @@ class SyntheticConfig:
 
     rings: int = 6
     spacing_deg: float = 5.0
-    n_central: int = 200
-    n_descending: int = 24
+    #: None scales both with eye size (see __post_init__).  Pinning them at a
+    #: fixed number stopped making sense once ``rings`` became large enough to
+    #: model a real eye: at rings=15 (Drosophila's actual ~750 ommatidia/eye)
+    #: the eye alone is 1442 photoreceptors, and a central brain frozen at 200
+    #: neurons with 24 descending neurons is not a smaller fly, it is a
+    #: caricature -- 97% optic lobe, 0.7% central brain, 0.09% descending,
+    #: against real proportions where the central brain and the ~1300
+    #: descending neurons are each a much larger share. The scaling below does
+    #: not claim those exact proportions (this generator's numbers are
+    #: "plausible, not measured" throughout); it only keeps the *ratio* to eye
+    #: size that these fields had at their original rings=6 default, so a
+    #: bigger eye gets a central brain and a motor bottleneck sized to match
+    #: rather than left behind.
+    n_central: int | None = None
+    n_descending: int | None = None
     n_lc4: int = 8
     n_lplc2: int = 8
     #: Fraction of a lobula cell's receptive field that overlaps its neighbours.
@@ -89,6 +102,15 @@ class SyntheticConfig:
     dn_visual_in_degree: int = 5
     feedback_edges: int = 200
     seed: int = 0
+
+    def __post_init__(self) -> None:
+        n_col = len(axial_ring_indices(self.rings))
+        # ratios measured at the historical rings=6 default: n_central=200,
+        # n_descending=24 against n_col=127 columns.
+        if self.n_central is None:
+            self.n_central = max(30, round(200 / 127 * n_col))
+        if self.n_descending is None:
+            self.n_descending = max(6, round(24 / 127 * n_col))
 
     #: Mean synapse counts per motif, roughly matching the spread seen in
     #: Codex (a handful to a few hundred per connected pair).

@@ -40,7 +40,33 @@ def _load_config(args) -> ExperimentConfig:
         if not value:
             raise SystemExit(f"--set expects key=value, got {item!r}")
         overrides[key.strip()] = _parse_scalar(value.strip())
-    return cfg.apply_overrides(overrides) if overrides else cfg
+    result = cfg.apply_overrides(overrides) if overrides else cfg
+    _warn_on_overrides_for_the_wrong_env(result.env.kind, overrides)
+    return result
+
+
+#: env.<kind> config sections that only take effect when env.kind matches.
+#: game and boss each have their own frame_source/capture/dry_run/etc., so
+#: --set env.boss.frame_source=mss silently does nothing when env.kind=game
+#: (and vice versa) -- there is no error, the env just keeps watching whatever
+#: its own section already said, which for the unset one is a dummy source.
+#: That is exactly the mistake that leaves a game import watching a synthetic
+#: grating while a real game sits untouched on the desktop, so it is worth a
+#: warning rather than silent data loss.
+_ENV_SPECIFIC_SECTIONS = ("game", "boss")
+
+
+def _warn_on_overrides_for_the_wrong_env(kind: str, overrides: dict) -> None:
+    for section in _ENV_SPECIFIC_SECTIONS:
+        if section == kind:
+            continue
+        mismatched = [key for key in overrides if key.startswith(f"env.{section}.")]
+        if mismatched:
+            print(
+                f"warning: env.kind={kind!r}, so these overrides have no effect "
+                f"(use env.{kind}.* instead): {', '.join(mismatched)}",
+                file=sys.stderr,
+            )
 
 
 def _parse_scalar(text: str):

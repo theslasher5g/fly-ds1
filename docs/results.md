@@ -233,3 +233,24 @@ flyds1 selftest                # numeric checks on every stage
 flyds1 tune                    # the gain table above
 flyds1 train --timesteps 60000 # the learning run
 ```
+
+## Two more fixes from testing against real Dark Souls footage
+
+**Central brain and descending neurons did not scale with eye size.** Moving
+the default eye to `rings=15` (Drosophila's real ~750 ommatidia/eye, see
+above) exposed that `n_central` and `n_descending` had stayed pinned at 200 and
+24 -- numbers sized for the old 127-facet default. At the new eye size that is
+97% optic lobe, 0.7% central brain, 0.09% descending: a caricature, not a
+smaller fly. Both now scale with the eye (preserving the ratio they had at the
+old rings=6 default), giving 1135 central neurons and 136 descending neurons at
+rings=15 -- a much less absurd proportion, at a cost of ~1s extra build time.
+
+**`--set env.boss.*` silently did nothing under `env.kind=game`.** The game and
+boss environments each have their own config section
+(`env.game.frame_source` vs `env.boss.frame_source`, etc.), and setting the
+wrong one produced no error -- the environment just kept using its own
+section's default, which for the untouched one is a dummy synthetic source.
+Diagnosed live: a real Dark Souls session on screen, and the fly's "game" panel
+showing a synthetic grating instead. `flyds1` now warns on stderr whenever a
+`--set` targets `env.game.*` or `env.boss.*` while `env.kind` is set to the
+other one.

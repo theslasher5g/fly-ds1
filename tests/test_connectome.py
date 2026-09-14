@@ -122,3 +122,20 @@ def test_network_save_load(network, tmp_path):
     assert back.n_neurons == network.n_neurons
     assert (back.W != network.W).nnz == 0
     assert np.array_equal(back.output_index, network.output_index)
+
+
+def test_central_and_descending_scale_with_eye_size():
+    """Regression: n_central and n_descending were pinned at 200/24 regardless
+    of rings, so a rings=15 eye (Drosophila's real ~750 ommatidia/eye) got a
+    central brain and a motor bottleneck sized for a much smaller eye --
+    0.7% central brain, 0.09% descending, instead of a proportion that keeps
+    pace with the eye."""
+    small = SyntheticConfig(rings=6)
+    large = SyntheticConfig(rings=15)
+    assert small.n_central == 200 and small.n_descending == 24  # unchanged at the old baseline
+    assert large.n_central > small.n_central * 4
+    assert large.n_descending > small.n_descending * 4
+
+    # explicit overrides (as test fixtures use) are still respected
+    explicit = SyntheticConfig(rings=15, n_central=60, n_descending=8)
+    assert explicit.n_central == 60 and explicit.n_descending == 8

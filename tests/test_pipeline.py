@@ -224,3 +224,32 @@ def test_default_config_uses_a_real_fly_eye():
     photoreceptors = connectome.neurons.photoreceptor_mask()
     per_eye = photoreceptors.sum() / 2
     assert per_eye / DROSOPHILA_OMMATIDIA_PER_EYE > 0.9
+
+
+def test_warns_when_overrides_target_the_wrong_env_section(capsys):
+    """Regression: --set env.boss.frame_source=mss with env.kind=game was
+    silently ignored, leaving the agent watching a dummy source while a real
+    game sat untouched."""
+    from flyds1.cli import _load_config
+
+    class Args:
+        config = None
+        set = ["env.kind=game", "env.boss.frame_source=mss", "env.boss.capture.width=1280"]
+
+    cfg = _load_config(Args())
+    assert cfg.env.kind == "game"
+    assert cfg.env.game.frame_source == "dummy"  # the override never touched this
+    err = capsys.readouterr().err
+    assert "env.boss.frame_source" in err and "env.boss.capture.width" in err
+    assert "env.game.*" in err
+
+
+def test_no_warning_when_overrides_match_the_env_kind(capsys):
+    from flyds1.cli import _load_config
+
+    class Args:
+        config = None
+        set = ["env.kind=game", "env.game.frame_source=mss"]
+
+    _load_config(Args())
+    assert capsys.readouterr().err == ""
