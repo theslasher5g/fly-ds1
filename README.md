@@ -85,8 +85,14 @@ horizontal motion from the Reichardt detectors.*
 
 ### 4. Game interface
 
-* `envs/arena.py` — a raycast first-person arena with textured walls and a
-  chasing enemy, ~2000 steps/s. This is where you do the algorithm work.
+* `envs/arena.py` — a raycast first-person arena with textured walls,
+  ~2000 steps/s, with two tasks. `target` (the default) is visual fixation:
+  steer at a bright marker that relocates when reached — the behaviour this
+  connectome is actually for, and a benchmark with a wide policy-controlled
+  range (scripted oracle +40.5 ± 1.0 against +6.0 for standing still).
+  `survive` is the chase task, closer to a souls game and much harder to learn
+  from: even a scripted oracle with ground-truth state loses ~40 hp per
+  episode. Do the algorithm work here, not in the real game.
 * `envs/game.py` — the real bridge: `mss` screen capture, `pydirectinput`
   (Windows) or `xdotool` (X11) input, reward read off the HUD (health bars) plus
   optic flow as a progress proxy. **`dry_run=True` by default**: it computes
@@ -107,6 +113,14 @@ photoreceptor, one gain per T4/T5 subtype), the decoder, and — optionally — 
 declared number of "plastic" edges standing in for connections the
 reconstruction missed.
 
+Actions are `MultiBinary`: held buttons are binary, and representing them as a
+thresholded continuous vector made every button flip at ~50% regardless of the
+policy (measured: action means of 0.004 against a policy standard deviation of
+1.0). The value function reads the raw observation rather than the descending
+neurons — the critic is not part of the animal, and the bottleneck only cost it
+accuracy. Both changes came out of the control experiments in
+[`docs/results.md`](docs/results.md).
+
 PPO replays its rollout buffer in shuffled minibatches, which a stateful
 recurrent network cannot serve. Two honest options, both implemented:
 
@@ -123,19 +137,47 @@ have.
 
 ## Where it stands
 
-Measured on the synthetic connectome (rings=3, 1674 neurons, arena at 160×90):
+The pipeline works and is verified stage by stage. The agent does not play yet,
+and the reason is now measured rather than guessed.
 
-* Signal reaches the descending neurons: stimulus-driven DN standard deviation
-  `1.2e-1` at gain 3.0, versus `2.6e-3` at gain 1.0 (`flyds1 tune`).
-* PPO runs at ~105 steps/s with the brain in the policy and moves the policy
-  (`approx_kl` ≈ 5e-5, within ~4× of a plain MLP baseline on the same
-  observations — the gap is the deliberately linear decoder).
-* **It does not learn to play yet.** Over 60k PPO steps in the arena, every
-  evaluation point stayed within noise of the untrained network (returns −13 to
-  −16 against an untrained −13.1 ± 13.9). `docs/results.md` has the full table
-  and where the next effort probably belongs — starting with a training budget
-  an order of magnitude larger, and with un-handicapping the critic, which
-  currently sees only the same 8 descending neurons as the policy.
+**Verified** (all on the synthetic connectome, all reproducible from the CLI):
+
+* numpy and PyTorch backends agree to 1e-15; connectome weights stay frozen.
+* The eye is retinotopic and the motion detectors are direction-selective.
+* Signal reaches the descending neurons: stimulus-driven DN spread `1.2e-1` at
+  gain 3.0 against `2.6e-3` at gain 1.0 (`flyds1 tune`).
+* PPO runs end to end at ~105 steps/s with the brain in the policy.
+
+**Fixed, each after measuring it** (details in [`docs/results.md`](docs/results.md)):
+
+* Buttons were a thresholded continuous vector: action means of 0.004 against a
+  policy standard deviation of 1.0, so every button flipped at ~50% regardless
+  of what was learnt. Now `MultiBinary`.
+* The critic was squeezed through the same 24-neuron bottleneck as the policy.
+  Now it reads the observation. With both fixes the fly's `approx_kl` went from
+  `2.5e-6` to `~1e-3`.
+* The chase task had almost no policy-controlled range — a scripted oracle with
+  ground truth scored −4.0 against −15.0 for standing still, and an MLP *with
+  that same ground truth* could not beat it. The target-fixation task has range
+  (+40.5 oracle against +6.0), and an MLP control learns it to oracle level in
+  40k steps.
+* The retina was aimed at a third of the screen while reporting "100% coverage"
+  — the metric measured the wrong direction. `selftest` now fails on it.
+* Two flaws in the synthetic connectome: lobula cells with randomly scattered
+  receptive fields, and descending neurons reachable only through the random
+  central brain.
+
+**Still open — and this is the honest headline:** with all of that fixed, the
+fly still does not learn the fixation task. A linear probe on the descending
+population predicts a steering oracle at the majority-class baseline (0.89
+against 0.88) while the same probe on the retinal input reaches 0.93. The
+spatial signal decays from a modulation depth of 2.0 at the photoreceptors to
+0.01 at the descending neurons, because this stand-in's central brain is random
+wiring and random wiring does not preserve where things are. That is a
+statement about the generator, not about *Drosophila* — the animal has the
+small-object detectors, retinotopic projections and strong identified LC→DN
+pathways that a synthetic stand-in does not. **This is the point where the real
+connectome stops being optional** (`flyds1 fetch`).
 
 ## Honest limitations
 

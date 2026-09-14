@@ -57,51 +57,157 @@ Sign flips with direction, magnitude matches, no response without motion.
 (`stack_k=4`, so 4×4 = 16 Euler substeps of a 1674-neuron network per step, on
 CPU). The arena alone runs at ~1900 steps/s, so the brain is the cost.
 
-**The policy moves.** `approx_kl` ≈ `5e-5` per update against ≈ `2e-4` for a
-plain 64×64 MLP on the same observations. The ~4× gap is the deliberately
-linear decoder reading 8–24 descending neurons; it is a constraint, not a bug.
+### The first run did not learn, and the controls said why
 
-**Learning in the arena.** 60k steps of PPO, evaluated deterministically over
-16 held-out episodes (fixed seeds) every 10k steps:
+60k steps on the chase task, evaluated deterministically every 10k: every point
+stayed within noise of the untrained network (returns −13 to −16 against an
+untrained −13.1 ± 13.9, death rate wandering between 38% and 56% with a
+standard error of ±12 points). Rather than tune hyper-parameters against that,
+two controls were run on the *same* task and budget:
 
-| | return | mean length | died | critic `explained_variance` |
-|---|---|---|---|---|
-| random actions | −13.4 ± 14.3 | 258 | 56% | — |
-| untrained fly | −13.1 ± 13.9 | 271 | 56% | — |
-| 10k steps | −16.5 ± 11.9 | 269 | 44% | +0.38 |
-| 20k steps | −14.4 ± 13.9 | 271 | 38% | +0.52 |
-| 30k steps | −16.5 ± 15.3 | 261 | 56% | +0.31 |
-| 40k steps | −15.1 ± 14.5 | 265 | 50% | +0.67 |
-| 50k steps | −13.6 ± 14.3 | 269 | 44% | +0.55 |
-| 60k steps | −14.8 ± 13.8 | 263 | 56% | −0.33 |
+| control | sees | result |
+|---|---|---|
+| MLP, privileged | ground-truth enemy distance and bearing | −11.1 → −11.5 over 150k steps, critic `explained_variance` 0.99 |
+| MLP, retina | exactly what the fly sees | −14.9 → −13.5 over 150k steps |
+| scripted oracle | ground truth, 6 lines of code | **−4.0 ± 2.0** |
 
-**Read this as: no learning.** With 16 episodes and a return spread of ~14, the
-standard error is ±3.5, and the death rate's is ±12 percentage points — every
-number in that table is within noise of the untrained network. The dip in death
-rate at 20k is not evidence of anything. What *is* solid: the loop runs, the
-gradients arrive, and the critic mostly does better than predicting the mean
-(which it never did before the reward normalisation).
+An unconstrained MLP with perfect information and a near-perfect critic could
+not approach a six-line script. **That rules out the fly pipeline as the
+cause** — whatever was blocking learning blocked everything equally. Three
+things turned out to be wrong, in increasing order of importance.
 
-Where the next effort probably belongs, in order:
+### 1. The action space was noise
 
-1. **Budget.** 60k steps is small for a vision-driven PPO task; a million is a
-   more usual order of magnitude. At 105 steps/s that is ~2.6 hours on CPU.
-2. **Give the critic more than the bottleneck.** With
-   `share_features_extractor=True` the value function sees the same 8–24
-   descending neurons as the policy. There is no reason to handicap the critic
-   — it is not part of the animal — but feeding it the raw observation needs a
-   custom SB3 policy, since `MlpPolicy` only ever hands it a features
-   extractor. This is the cheapest structural change on this list.
-3. **Memory.** `stack_k=4` is 130 ms of history. Escaping something that
-   approaches over several seconds may simply need more, i.e. a larger `k` or
-   `RecurrentPPO`.
-4. **A wider motor channel.** This configuration has 8 descending neurons; a
-   larger connectome has more, and the decoder is linear, so the channel width
-   is a hard ceiling on what the policy can express.
-5. **A denser reward.** Damage is sparse and delayed. Rewarding distance kept
-   from the enemy every step would give the policy gradient something to hold
-   on to — at the cost of telling the agent the answer instead of letting it
-   see it.
+Buttons were a continuous vector thresholded at zero. Measured on an untrained
+policy: the action means have magnitude **0.004** while the policy's own
+standard deviation is **1.0**. During training each button therefore flipped
+with probability ≈0.47 regardless of what had been learnt, and the
+deterministic evaluation decided behaviour by the *sign* of numbers 250× below
+that noise. Held buttons are now `MultiBinary` with a Bernoulli policy, where a
+logit shift maps straight onto a change in behaviour.
+
+### 2. The critic was squeezed through the bottleneck
+
+With a shared features extractor the value function saw the same 8–24
+descending neurons as the policy. The critic is not part of the animal, so the
+handicap bought nothing; `FlyActorCriticPolicy` gives it the raw observation
+while the actor still goes through the connectome.
+
+Together these two moved the fly's `approx_kl` per update from `2.5e-6` to
+`~1e-3` — the policy went from effectively frozen to actually moving.
+
+### 3. The task had almost no controllable range
+
+The deeper problem: on the chase task even the scripted oracle loses ~40 hp per
+episode, and most of the return is decided by where the enemy spawns. A
+benchmark whose optimum is barely distinguishable from doing nothing cannot
+teach a policy or measure one.
+
+The target-fixation task was added for that reason — steer at a bright marker,
+which relocates when reached:
+
+| policy | return | markers reached |
+|---|---|---|
+| standing still | +6.00 ± 0.00 | 0.0 |
+| walking blindly forward | −6.09 ± 1.76 | 0.1 |
+| forward while turning | +5.99 ± 0.19 | 0.0 |
+| **scripted oracle** | **+40.51 ± 1.04** | **2.6** |
+
+A 34-point spread with a standard error near 1, against 11 points of spread
+with ±3 on the chase task. It is also the behaviour the connectome is for:
+visual fixation is what T4/T5 and the lobula plate do.
+
+### Learning the target task
+
+PPO, 30 held-out episodes evaluated deterministically every 20k steps:
+
+| steps | MLP on ground truth | scripted oracle |
+|---|---|---|
+| random actions | +6.4 ± 0.1 (0.0 markers) | |
+| untrained | +5.6 ± 0.4 (0.0) | |
+| 20k | +37.2 ± 0.7 (2.1) | |
+| 40k | +40.3 ± 0.7 (2.5) | **+40.5 ± 1.0 (2.6)** |
+| 60k | +40.8 ± 0.6 (2.5) | |
+
+The control reaches the scripted oracle's score in 40k steps. That is the
+confirmation that mattered: with a benchmark that has range and an action space
+that means something, the same PPO setup that looked broken learns immediately.
+
+The fly, on the same task with everything the measurements asked for — a retina
+covering the whole screen (rings=6, 254 photoreceptors), the brain kept warm
+across the episode, `MultiBinary` actions, the critic on the observation:
+
+| steps | return | markers |
+|---|---|---|
+| random actions | +6.4 ± 0.3 | 0.0 |
+| untrained | +1.9 ± 0.5 | 0.0 |
+| 20k | +4.8 ± 0.6 | 0.0 |
+| 40k | +4.3 ± 1.0 | 0.1 |
+| 60k | +4.5 ± 0.7 | 0.0 |
+| 80k | +6.0 ± 0.0 | 0.0 |
+| 100k | −0.5 ± 1.5 | 0.0 |
+
+It never beats standing still (+6.0) and never reaches a marker, while the
+control was at oracle level after 40k. The difference is not the algorithm, the
+budget or the task — those are shared — it is what arrives at the descending
+neurons.
+
+### Why, and how far the signal gets
+
+The fly did not follow. Probing why produced the most useful numbers in this
+document, so they are worth stating in order.
+
+**The descending neurons are not told in time.** Drive the retina with a target
+drifting on the left versus the right of the screen and watch the descending
+population separate:
+
+| simulated time | ‖DN_left − DN_right‖ |
+|---|---|
+| 2 frames (66 ms) | 0.00000 |
+| **4 frames (132 ms)** — the default `stack_k` | **0.00025** |
+| 8 frames (264 ms) | 0.037 |
+| 16 frames (528 ms) | 0.142 |
+
+The path from photoreceptor to descending neuron is six or more synapses of
+10–50 ms each. Unrolling the network from rest over a 4-frame stack asks it to
+answer before the signal has arrived. Either use a much longer stack (4× the
+compute per policy step) or run the brain in the environment
+(`brain_location: wrapper`), where it is never cold.
+
+**The eye was pointed at a third of the screen.** `coverage()` said 100%, which
+was true and useless: every facet was on screen, but a 3-ring eye spans ±15°
+and the monitor spans 90°, so the retina sampled 58% of its width and the
+marker spent most of the episode outside the visual field. `screen_coverage()`
+now measures the direction that matters and `selftest` fails on it.
+
+**A random central brain is a blender.** Even warm, even with full coverage,
+the modulation a target position produces decays through the hierarchy:
+
+| population | modulation depth (std across target positions / mean rate) |
+|---|---|
+| photoreceptors | 2.0 |
+| optic lobe | 0.042 |
+| visual projection | 0.016 |
+| central brain | 0.009 |
+| descending | 0.010 |
+
+A linear probe trained on the descending rates to predict a steering oracle's
+actions lands at the majority-class baseline (0.88–0.89 against 0.88), while
+the same probe on the retinal input reaches 0.93. Two flaws in the generator
+were found and fixed this way — lobula cells with randomly scattered receptive
+fields instead of tiled ones, and descending neurons reachable only through the
+random central brain — and each fix helped a little (the correlation between a
+DN's preferred azimuth and the stimulus that drives it is |0.68| in a clean lab
+stimulus), but not enough to make steering decodable inside the cluttered arena.
+
+**That is a statement about the generator, not about Drosophila.** The
+synthetic connectome was built to exercise the plumbing, and it does: every
+stage is verified, and the numbers above were all measured through it. But its
+central brain is random wiring, and random wiring does not preserve where
+things are. The animal has what this stand-in lacks — small-object detectors
+that separate figure from background, retinotopic central projections, strong
+identified LC→DN pathways. **This is the point where the real connectome stops
+being optional.**
 
 ## Two measurement mistakes worth recording
 
