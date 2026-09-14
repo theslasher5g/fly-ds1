@@ -100,9 +100,7 @@ class ScreenGameEnv(gym.Env):
             self.input = make_input_backend(kind, window=self.cfg.window_name)
         self.reward_fn = ScreenRewardEstimator(self.cfg.reward)
 
-        self.action_space = spaces.Box(
-            low=-1.0, high=1.0, shape=(self.spec_actions.size,), dtype=np.float32
-        )
+        self.action_space = self.spec_actions.gym_space()
         self.observation_space = spaces.Box(
             low=0.0, high=1.0, shape=(self.cfg.frame_height, self.cfg.frame_width), dtype=np.float32
         )

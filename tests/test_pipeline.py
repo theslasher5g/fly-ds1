@@ -146,7 +146,7 @@ def test_pipeline_assembles_the_game_environment():
     assert obs.shape == (cfg.env.stack_k, layout.size)
 
     spec = action_spec_for(cfg)
-    assert spec.size == 11  # the Dark Souls bindings, not the arena's four
+    assert spec.size == 13  # 9 souls buttons + 4 camera buttons, not the arena's four
     action = np.zeros(spec.size, dtype=np.float32)
     action[0] = 1.0
     while True:

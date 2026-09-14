@@ -151,14 +151,36 @@ def test_game_env_never_sends_input_in_dry_run():
 
 
 def test_action_spec_decoding():
-    held, (dx, dy) = DARKSOULS_ACTIONS.decode(
-        np.array([1, -1, 1, -1, -1, 1, -1, -1, -1, 0.5, -0.25])
-    )
+    """Buttons are binary; the camera is four more buttons by default."""
+    assert DARKSOULS_ACTIONS.is_binary
+    action = np.zeros(DARKSOULS_ACTIONS.size, dtype=int)
+    for name in ("forward", "left", "attack"):
+        action[DARKSOULS_ACTIONS.button_index(name)] = 1
+    action[DARKSOULS_ACTIONS.n_buttons + 1] = 1  # camera_right
+    action[DARKSOULS_ACTIONS.n_buttons + 2] = 1  # camera_up
+    held, (dx, dy) = DARKSOULS_ACTIONS.decode(action)
     assert held["forward"] and held["left"] and held["attack"]
     assert not held["back"] and not held["block"]
-    assert dx == pytest.approx(20.0) and dy == pytest.approx(-10.0)
+    assert dx == pytest.approx(DARKSOULS_ACTIONS.camera_scale_px)
+    assert dy == pytest.approx(-DARKSOULS_ACTIONS.camera_scale_px)
     with pytest.raises(ValueError):
         DARKSOULS_ACTIONS.decode(np.zeros(3))
+
+
+def test_action_spec_continuous_camera_still_works():
+    spec = DARKSOULS_ACTIONS.with_camera("continuous")
+    assert not spec.is_binary and spec.size == DARKSOULS_ACTIONS.n_buttons + 2
+    held, (dx, dy) = spec.decode(np.r_[np.ones(spec.n_buttons), 0.5, -0.25])
+    assert held["forward"]
+    assert dx == pytest.approx(20.0) and dy == pytest.approx(-10.0)
+
+
+def test_action_spaces_are_binary():
+    from gymnasium import spaces
+
+    assert isinstance(FlyArenaEnv(SMALL_ARENA).action_space, spaces.MultiBinary)
+    assert isinstance(DARKSOULS_ACTIONS.gym_space(), spaces.MultiBinary)
+    assert isinstance(DARKSOULS_ACTIONS.with_camera("continuous").gym_space(), spaces.Box)
 
 
 def test_dummy_frame_source_moves():

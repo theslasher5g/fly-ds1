@@ -109,9 +109,9 @@ class FlyArenaEnv(gym.Env):
         self._column_angles = np.arctan(
             (np.arange(self.cfg.width) + 0.5 - self.cfg.width / 2.0) / self.focal
         )
-        self.action_space = spaces.Box(
-            low=-1.0, high=1.0, shape=(self.spec_actions.size,), dtype=np.float32
-        )
+        # MultiBinary for held buttons -- see flyds1.motor.actions for why a
+        # thresholded Box makes the policy indistinguishable from noise.
+        self.action_space = self.spec_actions.gym_space()
         self.observation_space = spaces.Box(
             low=0.0, high=1.0, shape=(self.cfg.height, self.cfg.width), dtype=np.float32
         )
