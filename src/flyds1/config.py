@@ -16,6 +16,7 @@ from typing import Any, Mapping, get_args, get_origin
 import yaml
 
 from flyds1.envs.arena import ArenaConfig
+from flyds1.envs.boss import BossConfig
 from flyds1.envs.game import GameConfig
 from flyds1.net.dynamics import RateConfig
 from flyds1.net.rate_rnn import TrainableParts
@@ -55,13 +56,14 @@ class EncoderSection:
 class EnvSection:
     """Step 4: which environment, and how the brain is attached."""
 
-    kind: str = "arena"                 # "arena" | "game"
+    kind: str = "arena"                 # "arena" | "game" | "boss"
     #: ``"policy"`` = brain inside the policy (encoder trainable, k-frame memory)
     #: ``"wrapper"`` = brain inside the env (episode-long memory, frozen encoder)
     brain_location: str = "policy"
     stack_k: int = 6
     arena: ArenaConfig = field(default_factory=ArenaConfig)
     game: GameConfig = field(default_factory=GameConfig)
+    boss: BossConfig = field(default_factory=BossConfig)
 
 
 @dataclass

@@ -55,7 +55,13 @@ def make_frame_env(cfg: ExperimentConfig, *, seed: int | None = None):
         from flyds1.envs.game import ScreenGameEnv
 
         return ScreenGameEnv(cfg.env.game)
-    raise ValueError(f"unknown env kind {cfg.env.kind!r} (expected 'arena' or 'game')")
+    if cfg.env.kind == "boss":
+        from flyds1.envs.boss import BossFightEnv
+
+        return BossFightEnv(cfg.env.boss)
+    raise ValueError(
+        f"unknown env kind {cfg.env.kind!r} (expected 'arena', 'game' or 'boss')"
+    )
 
 
 def make_env(cfg: ExperimentConfig, network: WiredNetwork, *, seed: int | None = None):
@@ -99,6 +105,12 @@ def make_front_end(cfg: ExperimentConfig, network: WiredNetwork) -> RetinaFrontE
         screen = type(frontend.screen)(
             width=cfg.env.arena.width,
             height=cfg.env.arena.height,
+            fov_h_deg=frontend.screen.fov_h_deg,
+        )
+    elif cfg.env.kind == "boss":
+        screen = type(frontend.screen)(
+            width=cfg.env.boss.frame_width,
+            height=cfg.env.boss.frame_height,
             fov_h_deg=frontend.screen.fov_h_deg,
         )
     else:

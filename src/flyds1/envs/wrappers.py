@@ -107,10 +107,28 @@ class RetinaWrapper(gym.Wrapper):
 
     def step(self, action):
         frame, reward, terminated, truncated, info = self.env.step(action)
-        obs = self.front_end.process(frame, self.dt)
+        obs = self._process(frame, info)
         if self.keep_frame_in_info:
             info = {**info, "frame": frame}
         return obs, reward, terminated, truncated, info
+
+    def _process(self, frame, info: dict):
+        """Integrate every frame the env saw, not only the last one.
+
+        An env that repeats an action over several frames (see
+        :class:`flyds1.envs.boss.BossFightEnv`) hands them over in
+        ``info["frames"]``.  Skipping them would hide most of the motion from
+        the detectors and starve the network of the very time it needs -- the
+        descending neurons take 8-16 frames to hear about a stimulus at all.
+        """
+        frames = info.get("frames") if isinstance(info, dict) else None
+        if not frames:
+            return self.front_end.process(frame, self.dt)
+        step_dt = self.dt / len(frames)
+        obs = None
+        for single in frames:
+            obs = self.front_end.process(single, step_dt)
+        return obs
 
 
 __all__ = ["RetinaWrapper"]

@@ -5,6 +5,10 @@
     flyds1 build   --out data/net.npz  build and cache the wired network
     flyds1 info                        summarise config, network and retina
     flyds1 selftest --png out/         run the whole pipeline offline and check it
+    flyds1 calibrate --frame shot.png  check HUD regions and field of view on a real frame
+    flyds1 watch --frames clip/         run the brain over recorded game footage
+    flyds1 live --port 8000            watch the fly play in a browser, live
+    flyds1 budget                      how many boss attempts an hour of real time buys
     flyds1 tune                        sweep the recurrent gain and recommend one
     flyds1 train   --config c.yaml     PPO training
     flyds1 play    --model m.zip       roll out a policy and report statistics
@@ -245,6 +249,249 @@ def _write_diagnostics(cfg: ExperimentConfig, net, out_dir: Path) -> list[Path]:
     return written
 
 
+def cmd_calibrate(args) -> int:
+    """Check the game-specific settings against one real frame.
+
+    Reads a screenshot, reports what the health-bar readers see, and writes an
+    annotated image: HUD regions outlined, and every ommatidium's gaze marked,
+    so it is obvious whether the eye is looking at the game or at the wall
+    behind it.  Setting these numbers by guessing is the single most common way
+    to spend an evening debugging a working pipeline.
+    """
+    from flyds1.envs.reward import BOSS_HP_REGION, PLAYER_HP_REGION, HealthBarReader
+    from flyds1.envs.screen import ReplayCapture
+    from flyds1.pipeline import build_network, make_front_end
+    from flyds1.plotting import draw_box, filmstrip, mark_points, save_png, to_uint8
+
+    cfg = _load_config(args)
+    frame = ReplayCapture(args.frame, loop=False).grab()
+    print(f"frame: {frame.shape[1]}x{frame.shape[0]} px")
+
+    regions = {"player hp": PLAYER_HP_REGION, "boss hp": BOSS_HP_REGION}
+    annotated = to_uint8(np.asarray(frame, dtype=float) / 255.0)
+    for name, region in regions.items():
+        value = HealthBarReader(region).read(frame)
+        print(f"  {name:10s} {value:5.0%} filled  region={region}")
+        annotated = draw_box(annotated, (region.x0, region.y0, region.x1, region.y1))
+
+    cfg = cfg.apply_overrides(
+        {"env.kind": "game", "env.game.frame_width": int(frame.shape[1]),
+         "env.game.frame_height": int(frame.shape[0])}
+    )
+    net = build_network(cfg)
+    front_end = make_front_end(cfg, net)
+    centres = np.concatenate(
+        [eye["sampler"].facet_pixel_centres() for eye in front_end.eyes.values()]
+    )
+    annotated = mark_points(annotated, centres)
+    print(front_end.describe())
+
+    out = Path(args.out or "calibration.png")
+    save_png(filmstrip([annotated]), out)
+    print(f"\nwrote {out}: red boxes are the HUD regions the reward reads,")
+    print("green dots are where the fly's ommatidia look.")
+    if front_end.screen_coverage() < 0.9:
+        print("the dots do not span the frame -- raise the connectome's rings or "
+              "lower frontend.screen.fov_h_deg before training on this")
+    return 0
+
+
+def cmd_watch(args) -> int:
+    """Run the brain over recorded footage and report what the DNs do.
+
+    No game, no key presses, no learning: just the perception path on real
+    frames, so you can see whether anything reaches the motor output before
+    committing hours of real-time play to it.
+    """
+    from flyds1.envs.screen import ReplayCapture
+    from flyds1.net.reference import RateNetwork
+    from flyds1.pipeline import build_network, make_front_end
+    from flyds1.plotting import bar_chart, facet_image, filmstrip, save_png, to_uint8
+    from flyds1.vision.encoder import build_encoder_wiring, encode_numpy
+
+    cfg = _load_config(args)
+    source = ReplayCapture(args.frames, loop=False)
+    first = source.grab()
+    source.reset()
+    cfg = cfg.apply_overrides(
+        {"env.kind": "game", "env.game.frame_width": int(first.shape[1]),
+         "env.game.frame_height": int(first.shape[0])}
+    )
+    net = build_network(cfg)
+    front_end = make_front_end(cfg, net)
+    wiring = build_encoder_wiring(net, front_end.layout, inject_motion=cfg.encoder.inject_motion)
+    sim = RateNetwork(net, cfg.rate)
+    dt = 1.0 / cfg.env.game.target_fps
+
+    print(front_end.describe())
+    print(f"reading {len(source)} frames at dt={dt * 1000:.0f} ms\n")
+
+    dn_history, obs_history, frames = [], [], []
+    for _ in range(len(source)):
+        frame = source.grab()
+        obs = front_end.process(frame, dt)
+        sim.step(encode_numpy(obs, front_end.layout, wiring))
+        dn_history.append(sim.outputs()[0].copy())
+        obs_history.append(obs)
+        frames.append(frame)
+
+    dn = np.stack(dn_history)
+    obs = np.stack(obs_history)
+    settle = min(len(dn) - 1, 10)
+    print(f"descending neurons: {dn.shape[1]}")
+    print(f"  mean rate            {dn[settle:].mean():.3f}")
+    print(f"  variation over time  {dn[settle:].std(axis=0).mean():.4f}")
+    print(f"  most active          {np.argsort(-dn[settle:].mean(axis=0))[:5].tolist()}")
+    print(f"  retinal input varies {obs[settle:, front_end.layout.photoreceptor_slice].std():.4f}")
+    if dn[settle:].std(axis=0).mean() < 1e-3:
+        print("\n  the descending population barely moves on this footage: nothing")
+        print("  downstream can act on it (see docs/results.md, 'how far the signal gets')")
+
+    if args.png:
+        out_dir = Path(args.png)
+        side = sorted(front_end.eyes)[-1]
+        eye = front_end.eyes[side]
+        panels_written = []
+        for k in np.linspace(settle, len(frames) - 1, min(4, len(frames) - settle)).astype(int):
+            photo, _ = front_end.layout.split(obs[k])
+            strip = filmstrip([
+                to_uint8(np.asarray(frames[k], dtype=float) / 255.0),
+                facet_image(eye["coords"], photo[eye["slots"]], signed=True),
+                bar_chart(dn[k] - dn[settle:].mean(axis=0)),
+            ])
+            panels_written.append(save_png(strip, out_dir / f"watch_{k:04d}.png"))
+        print(f"\nwrote {len(panels_written)} panels to {out_dir} "
+              "(frame | what the eye sees | descending activity)")
+    return 0
+
+
+def _find_wrapper(env, name: str):
+    """Walk a Gymnasium wrapper chain looking for a class by name."""
+    node = env
+    seen = 0
+    while node is not None and seen < 20:
+        if type(node).__name__ == name:
+            return node
+        node = getattr(node, "env", None)
+        seen += 1
+    return None
+
+
+def cmd_live(args) -> int:
+    """Run the agent and stream what it sees to a local web page.
+
+    Read-only: the viewer never touches the environment. Uses the wrapper brain
+    location so the network's state is continuous and its descending rates are
+    the observation -- which is what makes them watchable.
+    """
+    from flyds1.live import LiveView, format_stats
+    from flyds1.pipeline import action_spec_for, build_network, make_env
+
+    cfg = _load_config(args)
+    if cfg.env.brain_location != "wrapper":
+        print("live view runs the brain in the environment (brain_location=wrapper) "
+              "so its state is continuous; switching for this run")
+        cfg = cfg.apply_overrides({"env.brain_location": "wrapper"})
+
+    net = build_network(cfg)
+    env, _ = make_env(cfg, net, seed=args.seed)
+    retina = _find_wrapper(env, "RetinaWrapper")
+    brain = _find_wrapper(env, "FlyBrainWrapper")
+    if retina is None or brain is None:  # pragma: no cover - defensive
+        raise ValueError("could not find the retina/brain wrappers in the env chain")
+
+    front_end = retina.front_end
+    side = sorted(front_end.eyes)[-1]
+    eye = front_end.eyes[side]
+
+    view = LiveView(Path(args.out or "live"), refresh_ms=args.refresh)
+    url = view.serve(args.port)
+    print(f"open {url} -- panels: game | what the eye sees | motion | descending neurons")
+
+    policy = None
+    if args.model:
+        from stable_baselines3 import PPO
+
+        policy = PPO.load(args.model, device=cfg.training.device)
+    spec = action_spec_for(cfg)
+    rng = np.random.default_rng(args.seed)
+
+    try:
+        for episode in range(args.episodes):
+            obs, info = env.reset(
+                options={"skip_macros": args.skip_macros} if cfg.env.kind == "boss" else None
+            )
+            total, steps = 0.0, 0
+            while True:
+                if policy is not None:
+                    action, _ = policy.predict(obs, deterministic=args.deterministic)
+                else:
+                    action = (rng.random(spec.size) < 0.25).astype(np.int8)
+                obs, reward, terminated, truncated, info = env.step(action)
+                total += float(reward)
+                steps += 1
+
+                frames = info.get("frames")
+                frame = frames[-1] if frames else info.get("frame")
+                if frame is None:
+                    frame = np.zeros((cfg.frontend.screen.height, cfg.frontend.screen.width))
+                retina_obs = front_end.process(frame, retina.dt) if frames is None else None
+                photo, motion = front_end.layout.split(
+                    retina_obs if retina_obs is not None else front_end.process(frame, retina.dt)
+                )
+                horizontal = None
+                if front_end.layout.motion_mode == "retinotopic":
+                    horizontal = (motion[eye["slots"]][:, 0] - motion[eye["slots"]][:, 1])
+                view.update(
+                    frame,
+                    eye_coords=eye["coords"],
+                    photoreceptors=photo[eye["slots"]],
+                    motion=horizontal,
+                    descending=brain.sim.outputs()[0],
+                    stats=format_stats(
+                        info,
+                        {"episode": episode, "return": total, "steps": steps,
+                         "keys": len([k for k in np.atleast_1d(action) if k > 0])},
+                    ),
+                )
+                if terminated or truncated:
+                    break
+            print(f"episode {episode}: return {total:+.2f} over {steps} decisions")
+    except KeyboardInterrupt:  # pragma: no cover - interactive
+        print("\nstopped")
+    finally:
+        view.stop()
+        env.close()
+    return 0
+
+
+def cmd_budget(args) -> int:
+    """Print the real-time arithmetic of a boss-fight run.
+
+    The first number to look at in a project whose environment runs at wall
+    clock speed, and the one most likely to end an experiment before it starts.
+    """
+    from flyds1.envs.boss import BossFightEnv
+
+    cfg = _load_config(args)
+    env = BossFightEnv(cfg.env.boss, sleep_fn=lambda _s: None)
+    budget = env.budget(hours=1.0)
+    print("boss fight, real-time budget")
+    print(f"  action_repeat {cfg.env.boss.action_repeat} at {cfg.env.boss.target_fps:.0f} fps"
+          f" -> {budget['seconds_per_decision'] * 1000:.0f} ms per decision")
+    print(f"  attempt (max {cfg.env.boss.max_fight_steps} decisions) plus run-back"
+          f" -> {budget['seconds_per_attempt_max']:.0f} s")
+    print(f"  {budget['attempts_per_hour']:.0f} attempts/hour,"
+          f" {budget['decisions_per_hour']:.0f} decisions/hour")
+    print(f"  1M decisions would take {budget['hours_for_1M_decisions']:.0f} hours"
+          f" ({budget['hours_for_1M_decisions'] / 24:.1f} days) of real play")
+    print("\nPublished single-boss RL runs use millions of steps. If that number is")
+    print("uncomfortable, the levers are action_repeat, max_fight_steps and the")
+    print("run-back macro -- not patience.")
+    env.close()
+    return 0
+
+
 def cmd_tune(args) -> int:
     """Sweep the recurrent gain and report where the signal reaches the DNs."""
     from flyds1.connectome.loader import load_connectome
@@ -347,6 +594,12 @@ def cmd_play(args) -> int:
               f"({json.dumps({k: round(v, 2) for k, v in info.items() if isinstance(v, (int, float))})})")
     print(f"\nmean return {np.mean(returns):+.2f} +- {np.std(returns):.2f} "
           f"over {args.episodes} episodes, mean length {np.mean(lengths):.0f}")
+    if "kills" in info:
+        kills, attempts = int(info["kills"]), int(info.get("attempts", args.episodes))
+        print(f"boss: {kills} kill(s) in {attempts} attempts")
+        if policy is not None:
+            print("run the same number of attempts without --model for the random-action "
+                  "baseline; a kill only means something above it")
     return 0
 
 
@@ -375,6 +628,32 @@ def build_parser() -> argparse.ArgumentParser:
     p_self = sub.add_parser("selftest", help="run every pipeline step once with checks")
     p_self.add_argument("--png", type=Path, help="also write diagnostic images to this directory")
     p_self.set_defaults(func=cmd_selftest)
+
+    p_cal = sub.add_parser("calibrate", help="check HUD regions and field of view on a frame")
+    p_cal.add_argument("--frame", required=True, help="a screenshot (png/jpg) or .npy frame")
+    p_cal.add_argument("--out", help="annotated image to write (default calibration.png)")
+    p_cal.set_defaults(func=cmd_calibrate)
+
+    p_watch = sub.add_parser("watch", help="run the brain over recorded footage")
+    p_watch.add_argument("--frames", required=True, help="folder of frames or .npy stack")
+    p_watch.add_argument("--png", help="write diagnostic panels to this directory")
+    p_watch.set_defaults(func=cmd_watch)
+
+    p_live = sub.add_parser("live", help="watch the agent play in a browser")
+    p_live.add_argument("--model", help="trained model .zip (random actions if omitted)")
+    p_live.add_argument("--port", type=int, default=8000)
+    p_live.add_argument("--out", help="directory for the viewer files (default ./live)")
+    p_live.add_argument("--refresh", type=int, default=200, help="page refresh interval, ms")
+    p_live.add_argument("--episodes", type=int, default=1)
+    p_live.add_argument("--seed", type=int, default=0)
+    p_live.add_argument("--deterministic", action="store_true")
+    p_live.add_argument("--skip-macros", action="store_true",
+                        help="boss env: do not play the run-back macro")
+    p_live.set_defaults(func=cmd_live)
+
+    sub.add_parser("budget", help="real-time arithmetic of a boss-fight run").set_defaults(
+        func=cmd_budget
+    )
 
     p_tune = sub.add_parser("tune", help="sweep the recurrent gain")
     p_tune.add_argument("--gains", type=float, nargs="+", help="gains to try")

@@ -101,6 +101,86 @@ def facet_image(
     return rgb
 
 
+def bar_chart(
+    values: np.ndarray,
+    *,
+    width: int = 240,
+    height: int = 120,
+    signed: bool = True,
+    background: int = 24,
+) -> np.ndarray:
+    """Render a row of values as bars -- e.g. descending-neuron activity."""
+    vals = np.asarray(values, dtype=float).ravel()
+    if len(vals) == 0:
+        return np.full((height, width, 3), background, dtype=np.uint8)
+    canvas = np.full((height, width, 3), background, dtype=np.uint8)
+    peak = float(np.max(np.abs(vals))) or 1.0
+    bar_w = max(1, width // len(vals))
+    mid = height // 2 if signed else height - 1
+    for k, value in enumerate(vals):
+        x0 = k * bar_w
+        x1 = min(width, x0 + max(1, bar_w - 1))
+        extent = int((value / peak) * (height / 2 - 2)) if signed else int(
+            (value / peak) * (height - 2)
+        )
+        if signed:
+            y0, y1 = (mid - extent, mid) if extent >= 0 else (mid, mid - extent)
+            colour = (255, 170, 60) if extent >= 0 else (80, 140, 255)
+        else:
+            y0, y1 = mid - extent, mid
+            colour = (255, 170, 60)
+        y0, y1 = max(0, min(y0, height - 1)), max(1, min(y1, height))
+        canvas[y0:y1, x0:x1] = colour
+    canvas[mid : mid + 1, :] = 90
+    return canvas
+
+
+def draw_box(
+    image: np.ndarray,
+    box: tuple[float, float, float, float],
+    *,
+    colour: tuple[int, int, int] = (255, 80, 80),
+    thickness: int = 2,
+) -> np.ndarray:
+    """Outline a fractional ``(x0, y0, x1, y1)`` region on an RGB image."""
+    out = np.array(image, dtype=np.uint8, copy=True)
+    if out.ndim == 2:
+        out = np.stack([out] * 3, axis=-1)
+    h, w = out.shape[:2]
+    x0, y0, x1, y1 = box
+    px0, px1 = int(x0 * w), int(np.ceil(x1 * w))
+    py0, py1 = int(y0 * h), int(np.ceil(y1 * h))
+    px0, px1 = max(0, px0), min(w, max(px0 + 1, px1))
+    py0, py1 = max(0, py0), min(h, max(py0 + 1, py1))
+    t = max(1, thickness)
+    out[py0 : py0 + t, px0:px1] = colour
+    out[max(py0, py1 - t) : py1, px0:px1] = colour
+    out[py0:py1, px0 : px0 + t] = colour
+    out[py0:py1, max(px0, px1 - t) : px1] = colour
+    return out
+
+
+def mark_points(
+    image: np.ndarray,
+    points: np.ndarray,
+    *,
+    colour: tuple[int, int, int] = (90, 220, 120),
+    radius: int = 1,
+) -> np.ndarray:
+    """Dot every point (pixel coordinates) on an RGB image."""
+    out = np.array(image, dtype=np.uint8, copy=True)
+    if out.ndim == 2:
+        out = np.stack([out] * 3, axis=-1)
+    h, w = out.shape[:2]
+    for x, y in np.asarray(points, dtype=float):
+        if not np.isfinite([x, y]).all():
+            continue
+        xi, yi = int(round(x)), int(round(y))
+        if 0 <= xi < w and 0 <= yi < h:
+            out[max(0, yi - radius) : yi + radius + 1, max(0, xi - radius) : xi + radius + 1] = colour
+    return out
+
+
 def filmstrip(images: list[np.ndarray], *, pad: int = 4, background: int = 40) -> np.ndarray:
     """Concatenate images horizontally, padding to the tallest."""
     prepared = []
@@ -121,4 +201,13 @@ def filmstrip(images: list[np.ndarray], *, pad: int = 4, background: int = 40) -
     return canvas
 
 
-__all__ = ["facet_image", "filmstrip", "save_png", "signed_colormap", "to_uint8"]
+__all__ = [
+    "bar_chart",
+    "draw_box",
+    "facet_image",
+    "filmstrip",
+    "mark_points",
+    "save_png",
+    "signed_colormap",
+    "to_uint8",
+]

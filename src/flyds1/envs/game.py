@@ -59,7 +59,8 @@ class GameConfig:
     """How to see the game, how to press its keys, how fast to run."""
 
     capture: CaptureRegion = field(default_factory=CaptureRegion)
-    frame_source: str = "dummy"        # "mss" for the real screen
+    frame_source: str = "dummy"        # "mss" live, "replay" from a recording
+    replay_path: str | None = None     # folder of frames or .npy stack
     input_backend: str = "dry"         # "auto" / "pydirectinput" / "xdotool"
     window_name: str | None = None     # for xdotool targeting
     dry_run: bool = True               # True: never send input
@@ -92,7 +93,9 @@ class ScreenGameEnv(gym.Env):
         self.cfg = config or GameConfig()
         self.spec_actions = action_spec or DARKSOULS_ACTIONS
         self.bindings = {b.name: b.key for b in self.spec_actions.buttons}
-        self.source = frame_source or make_frame_source(self.cfg.frame_source, self.cfg.capture)
+        self.source = frame_source or make_frame_source(
+            self.cfg.frame_source, self.cfg.capture, path=self.cfg.replay_path
+        )
         if input_backend is not None:
             self.input = input_backend
         else:
