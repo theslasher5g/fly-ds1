@@ -95,6 +95,7 @@ class TrainingSection:
     #: neurons as the policy). The critic is not part of the animal, so the
     #: bottleneck only costs accuracy -- see docs/results.md.
     critic_sees: str = "observation"
+    verbose: int = 1
 
 
 @dataclass

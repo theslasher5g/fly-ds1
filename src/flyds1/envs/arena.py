@@ -11,13 +11,28 @@ properties the fly model actually cares about:
 * a reward built from distance, survival and damage -- the same three terms the
   roadmap proposes for the real game.
 
+Two tasks share that world, selected by ``ArenaConfig.task``:
+
+``"survive"``
+    Outrun the chaser. Closest to the game, and the harder benchmark: measured
+    here, even a scripted oracle with ground-truth state still loses ~40 hp per
+    episode, so most of the return is decided by spawn geometry rather than by
+    the policy. Good as a final test, poor as a first one.
+
+``"target"``
+    Steer to a bright marker, which relocates each time it is reached. This is
+    fly behaviour in the literal sense -- fixation on a visual target is what
+    the T4/T5 and lobula-plate machinery in the connectome is *for* -- and the
+    return spans a wide, policy-controlled range: a policy that cannot see the
+    target reaches roughly none, one that can reaches a dozen.
+
 Rendering is a grid raycaster: one ray per screen column, DDA through a tile
 map, plus a billboard for the enemy.  No dependencies beyond numpy.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -39,6 +54,26 @@ except ImportError:  # pragma: no cover - optional dependency
     gym = _Stub()  # type: ignore[assignment]
     spaces = None  # type: ignore[assignment]
 
+
+#: Open arena: border walls only.  The target task uses this, because a
+#: fixation task must test the see-it-and-steer loop, not path-finding -- in the
+#: pillared map a target across the room is usually behind a wall, and a
+#: straight-line policy spends the episode scraping along pillars.
+OPEN_MAP = [
+    "######################",
+    "#....................#",
+    "#....................#",
+    "#....................#",
+    "#....................#",
+    "#....................#",
+    "#....................#",
+    "#....................#",
+    "#....................#",
+    "#....................#",
+    "#....................#",
+    "#....................#",
+    "######################",
+]
 
 DEFAULT_MAP = [
     "################",
@@ -65,9 +100,15 @@ class ArenaConfig:
     width: int = 320
     height: int = 180
     fov_h_deg: float = 90.0
-    tile_map: tuple[str, ...] = field(default_factory=lambda: tuple(DEFAULT_MAP))
+    #: ``None`` picks the map that suits the task: the pillared arena for
+    #: "survive" (somewhere to break line of sight) and the open one for
+    #: "target" (line of sight is the point).
+    tile_map: tuple[str, ...] | None = None
     dt: float = 1.0 / 30.0
     max_steps: int = 900
+
+    #: ``"survive"`` (outrun the chaser) or ``"target"`` (steer to the marker).
+    task: str = "target"
 
     move_speed: float = 2.5        # tiles / s
     turn_speed: float = 2.4        # rad / s
@@ -89,7 +130,21 @@ class ArenaConfig:
     reward_death: float = 10.0
     reward_wall_bump: float = 0.05
 
+    # target task
+    target_radius: float = 1.5         # how close counts as reached
+    reward_target: float = 5.0         # per target reached
+    reward_approach: float = 1.0       # per tile of distance closed
+    target_enemy: bool = False         # keep the chaser around in target mode
+
     seed: int = 0
+
+    def __post_init__(self) -> None:
+        if self.task not in ("survive", "target"):
+            raise ValueError(f"task must be 'survive' or 'target', got {self.task!r}")
+        if self.tile_map is None:
+            self.tile_map = tuple(OPEN_MAP if self.task == "target" else DEFAULT_MAP)
+        else:
+            self.tile_map = tuple(self.tile_map)
 
 
 class FlyArenaEnv(gym.Env):
@@ -125,9 +180,12 @@ class FlyArenaEnv(gym.Env):
         self.pos = self._free_cell()
         self.angle = float(self.np_random.uniform(0, 2 * np.pi))
         self.enemy = self._free_cell(min_distance=4.0)
+        self.target = self._free_cell(min_distance=3.0)
         self.hp = self.cfg.start_hp
         self.steps = 0
         self.distance_travelled = 0.0
+        self.targets_reached = 0
+        self._target_distance = float(np.linalg.norm(self.target - self.pos))
         return self._observe(), self._info()
 
     def _free_cell(self, min_distance: float = 0.0) -> np.ndarray:
@@ -161,33 +219,56 @@ class FlyArenaEnv(gym.Env):
                 bumped = True
         self.distance_travelled += moved
 
-        # enemy chases
-        to_agent = self.pos - self.enemy
-        dist = float(np.linalg.norm(to_agent))
-        if dist > 1e-6:
-            enemy_step = to_agent / dist * cfg.enemy_speed * cfg.dt
-            for axis in (0, 1):
-                candidate = self.enemy.copy()
-                candidate[axis] += enemy_step[axis]
-                if self._is_free(candidate):
-                    self.enemy = candidate
-        hp_before = self.hp
-        if dist < cfg.contact_range:
-            self.hp -= cfg.enemy_damage * cfg.dt
-        damage = hp_before - self.hp
+        # the chaser: always present in "survive", optional in "target"
+        damage = 0.0
+        if self._enemy_active():
+            to_agent = self.pos - self.enemy
+            dist = float(np.linalg.norm(to_agent))
+            if dist > 1e-6:
+                enemy_step = to_agent / dist * cfg.enemy_speed * cfg.dt
+                for axis in (0, 1):
+                    candidate = self.enemy.copy()
+                    candidate[axis] += enemy_step[axis]
+                    if self._is_free(candidate):
+                        self.enemy = candidate
+            hp_before = self.hp
+            if dist < cfg.contact_range:
+                self.hp -= cfg.enemy_damage * cfg.dt
+            damage = hp_before - self.hp
 
         self.steps += 1
         terminated = self.hp <= 0.0
         truncated = self.steps >= cfg.max_steps
 
         reward = (
-            cfg.reward_progress * moved
-            + cfg.reward_survival
+            cfg.reward_survival
             - cfg.reward_damage * damage
             - (cfg.reward_wall_bump if bumped else 0.0)
             - (cfg.reward_death if terminated else 0.0)
         )
+        if cfg.task == "survive":
+            reward += cfg.reward_progress * moved
+        else:
+            reward += self._target_step()
         return self._observe(), float(reward), bool(terminated), bool(truncated), self._info()
+
+    def _enemy_active(self) -> bool:
+        return self.cfg.task == "survive" or self.cfg.target_enemy
+
+    def _target_step(self) -> float:
+        """Reward for closing on the marker, and for reaching it."""
+        cfg = self.cfg
+        distance = float(np.linalg.norm(self.target - self.pos))
+        # Shaping on the *change* in distance: a potential-based term, so it
+        # rewards making progress rather than loitering near the marker.
+        reward = cfg.reward_approach * (self._target_distance - distance)
+        self._target_distance = distance
+        if distance < cfg.target_radius:
+            reward += cfg.reward_target
+            self.targets_reached += 1
+            self.target = self._free_cell(min_distance=4.0)
+            self._target_distance = float(np.linalg.norm(self.target - self.pos))
+        return reward
 
     def _is_free(self, pos: np.ndarray) -> bool:
         x, y = pos
@@ -215,7 +296,11 @@ class FlyArenaEnv(gym.Env):
         # floor gets a gradient so looking down is not featureless
         floor = np.clip((rows - horizon) / horizon, 0, 1) * 0.12
         frame[:] = np.where(wall_mask, frame, floor)
-        self._draw_enemy(frame, perp)
+        if self._enemy_active():
+            self._draw_billboard(frame, perp, self.enemy, size_scale=0.8, brightness=0.95)
+        if self.cfg.task == "target":
+            self._draw_billboard(frame, perp, self.target, size_scale=1.1, brightness=1.0,
+                                 aspect=0.35)
         return np.clip(frame, 0.0, 1.0)
 
     def _cast(self, angles: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -262,8 +347,17 @@ class FlyArenaEnv(gym.Env):
         stripe = ((map_x + map_y) % 2 == 0).astype(float) * 0.15
         return np.maximum(dist, 1e-3), np.clip(shade - stripe, 0.05, 1.0)
 
-    def _draw_enemy(self, frame: np.ndarray, wall_perp: np.ndarray) -> None:
-        rel = self.enemy - self.pos
+    def _draw_billboard(
+        self,
+        frame: np.ndarray,
+        wall_perp: np.ndarray,
+        position: np.ndarray,
+        *,
+        size_scale: float = 0.8,
+        brightness: float = 0.95,
+        aspect: float = 1.0,
+    ) -> None:
+        rel = position - self.pos
         dist = float(np.linalg.norm(rel))
         if dist < 1e-3:
             return
@@ -272,8 +366,9 @@ class FlyArenaEnv(gym.Env):
         if abs(bearing) > np.deg2rad(self.cfg.fov_h_deg) / 2 + 0.3:
             return
         cx = self.cfg.width / 2.0 + np.tan(bearing) * self.focal
-        size = np.clip(self.cfg.height * 0.8 / dist, 3, self.cfg.height)
-        x0, x1 = int(cx - size / 2), int(cx + size / 2)
+        size = np.clip(self.cfg.height * size_scale / dist, 3, self.cfg.height)
+        width = max(2.0, size * aspect)
+        x0, x1 = int(cx - width / 2), int(cx + width / 2)
         y0 = int(self.cfg.height / 2.0 - size / 2)
         y1 = int(self.cfg.height / 2.0 + size / 2)
         xs = np.arange(max(0, x0), min(self.cfg.width, x1 + 1))
@@ -284,7 +379,7 @@ class FlyArenaEnv(gym.Env):
         if len(visible) == 0:
             return
         # a bright silhouette: high contrast so looming is unmistakable
-        frame[np.ix_(ys, visible)] = 0.95
+        frame[np.ix_(ys, visible)] = brightness
 
     # ------------------------------------------------------------------
     def _info(self) -> dict:
@@ -293,6 +388,8 @@ class FlyArenaEnv(gym.Env):
             "position": self.pos.copy(),
             "angle": float(self.angle),
             "enemy_distance": float(np.linalg.norm(self.enemy - self.pos)),
+            "target_distance": float(np.linalg.norm(self.target - self.pos)),
+            "targets_reached": int(self.targets_reached),
             "distance_travelled": float(self.distance_travelled),
             "steps": int(self.steps),
         }
@@ -302,4 +399,4 @@ class FlyArenaEnv(gym.Env):
         return (np.stack([frame] * 3, axis=-1) * 255).astype(np.uint8)
 
 
-__all__ = ["ArenaConfig", "DEFAULT_MAP", "FlyArenaEnv"]
+__all__ = ["ArenaConfig", "DEFAULT_MAP", "OPEN_MAP", "FlyArenaEnv"]

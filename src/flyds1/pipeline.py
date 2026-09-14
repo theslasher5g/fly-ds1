@@ -162,7 +162,7 @@ def make_model(cfg: ExperimentConfig, env, network: WiredNetwork, layout: ObsLay
         seed=train.seed,
         device=train.device,
         policy_kwargs=kwargs,
-        verbose=1,
+        verbose=train.verbose,
     )
 
 

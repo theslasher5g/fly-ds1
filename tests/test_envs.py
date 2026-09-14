@@ -64,7 +64,8 @@ def test_arena_walls_block_movement():
 
 
 def test_arena_enemy_damages_the_player():
-    env = FlyArenaEnv(ArenaConfig(**{**SMALL_ARENA.__dict__, "max_steps": 200}))
+    # the chaser only exists in the survive task (or with target_enemy set)
+    env = FlyArenaEnv(ArenaConfig(width=96, height=54, max_steps=200, seed=1, task="survive"))
     env.reset(seed=1)
     env.enemy = env.pos.copy() + 0.1
     for _ in range(20):
@@ -186,3 +187,66 @@ def test_action_spaces_are_binary():
 def test_dummy_frame_source_moves():
     src = make_frame_source("dummy")
     assert not np.array_equal(src.grab(), src.grab())
+
+
+def _target_oracle(env):
+    """Steer at the marker: the behaviour the target task is meant to reward."""
+    e = env.unwrapped
+    rel = e.target - e.pos
+    err = (np.arctan2(rel[1], rel[0]) - e.angle + np.pi) % (2 * np.pi) - np.pi
+    action = np.zeros(4, dtype=np.int8)
+    if abs(err) > 0.15:
+        action[3 if err > 0 else 2] = 1
+    if abs(err) < 1.0:
+        action[0] = 1
+    return action
+
+
+def _episode(env, policy, seed):
+    env.reset(seed=seed)
+    total = 0.0
+    while True:
+        _, reward, terminated, truncated, info = env.step(policy(env))
+        total += reward
+        if terminated or truncated:
+            return total, info
+
+
+def test_target_task_picks_the_open_map():
+    from flyds1.envs.arena import OPEN_MAP
+
+    cfg = ArenaConfig(task="target")
+    assert cfg.tile_map == tuple(OPEN_MAP)
+    assert ArenaConfig(task="survive").tile_map != tuple(OPEN_MAP)
+    with pytest.raises(ValueError, match="task must be"):
+        ArenaConfig(task="nonsense")
+
+
+def test_target_is_visible_and_reachable():
+    env = FlyArenaEnv(ArenaConfig(width=160, height=90, max_steps=300, task="target"))
+    env.reset(seed=3)
+    rel = env.target - env.pos
+    env.angle = float(np.arctan2(rel[1], rel[0]))
+    frame = env._observe()
+    assert frame.max() > 0.97, "the marker must be the brightest thing in view"
+    assert (frame > 0.97).sum() > 10
+
+    _, info = _episode(env, _target_oracle, seed=10_000)
+    assert info["targets_reached"] >= 1
+
+
+def test_target_task_separates_seeing_from_not_seeing():
+    """The point of this task: a policy that steers at the marker must score
+    far above one that does not, or it cannot teach anything."""
+    env = FlyArenaEnv(ArenaConfig(width=160, height=90, max_steps=300, task="target"))
+    oracle = [_episode(env, _target_oracle, 10_000 + e)[0] for e in range(5)]
+    idle = [_episode(env, lambda _e: np.zeros(4, dtype=np.int8), 10_000 + e)[0] for e in range(5)]
+    assert np.mean(oracle) > np.mean(idle) + 20
+
+
+def test_survive_task_still_works():
+    env = FlyArenaEnv(ArenaConfig(width=96, height=54, max_steps=60, task="survive"))
+    obs, info = env.reset(seed=1)
+    assert "enemy_distance" in info
+    _, info = _episode(env, lambda _e: np.array([1, 0, 0, 0], dtype=np.int8), seed=1)
+    assert info["steps"] == 60 or info["hp"] <= 0
