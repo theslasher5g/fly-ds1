@@ -13,6 +13,19 @@ that fails too, the attempt is abandoned as "lost" rather than blundering on --
 a run-back that silently went the wrong way turns every following attempt into
 noise.
 
+**Dying along the way is not "lost", it is normal.** A route that runs past
+live enemies (skeletons on the way to a boss, say) will occasionally get the
+character killed -- Dark Souls' own answer to that is to respawn at the last
+bonfire, which for a run-back *is the route's own starting point*. So death is
+detected (reusing :class:`~flyds1.envs.detectors.DeathScreenDetector`) and
+handled by waiting out the reload and restarting the route from waypoint zero,
+up to a configured number of times, rather than being confused for a
+navigation failure. The alternative -- teaching the connectome to reliably
+dodge or fight those enemies -- is a much larger, unproven claim (see
+docs/results.md on how little steering information this pipeline has been
+shown to extract even from a plain visual target); tolerating an occasional
+death is the honest, buildable way to get a reliable run past them today.
+
 Matching is zero-mean normalised correlation on a heavily downscaled greyscale
 patch. Downscaling and mean-removal are what make it survive the things that
 change between visits to the same spot: torch flicker, the player's own
@@ -114,14 +127,28 @@ class RouteResult:
     failed_at: int | None = None
     scores: list[float] = field(default_factory=list)
     attempts: list[int] = field(default_factory=list)
+    #: Times the route died and restarted from the beginning. Not a failure by
+    #: itself -- see the module docstring on why dying past live enemies is
+    #: treated as normal and handled by restarting, not by giving up.
+    deaths: int = 0
+    #: True only when the route was abandoned because it kept dying, past
+    #: ``max_respawns`` -- distinct from a genuine "lost" (checkpoint
+    #: mismatch), which is ``failed_at`` with ``deaths`` possibly still 0.
+    died_out: bool = False
 
     def describe(self) -> str:
+        died = f", died {self.deaths}x en route" if self.deaths else ""
         if self.completed:
             worst = min(self.scores) if self.scores else float("nan")
-            return f"route completed, {len(self.scores)} checkpoints, worst match {worst:+.2f}"
+            return (
+                f"route completed, {len(self.scores)} checkpoints, "
+                f"worst match {worst:+.2f}{died}"
+            )
+        if self.died_out:
+            return f"route abandoned after dying {self.deaths}x without reaching the end"
         return (
             f"route lost at waypoint {self.failed_at} "
-            f"(match {self.scores[-1]:+.2f} if any checkpoint was reached)"
+            f"(match {self.scores[-1]:+.2f} if any checkpoint was reached){died}"
         )
 
 
@@ -146,6 +173,9 @@ class Route:
         sleep_fn=None,
         fps: float = 30.0,
         steer=None,
+        handle_death: bool = True,
+        respawn_wait_s: float = 10.0,
+        max_respawns: int = 3,
     ) -> RouteResult:
         """Walk the route, verifying each checkpoint.
 
@@ -153,38 +183,77 @@ class Route:
         ``callable(frame) -> iterable[str]`` contributing extra buttons each
         frame -- the hook through which the connectome does local avoidance
         while the route supplies the direction.
+
+        ``handle_death`` treats dying along the way as a restart rather than a
+        "lost" route: Dark Souls respawns at the last bonfire, which for a
+        run-back is the route's own starting point, so the fix is to wait out
+        the reload and begin again from waypoint zero. ``max_respawns`` caps
+        that so a route that always leads to death does not loop forever.
         """
         import time as _time
 
+        from flyds1.envs.detectors import DeathScreenDetector
+
         sleep = sleep_fn if sleep_fn is not None else _time.sleep
-        result = RouteResult(completed=True)
+        detector = DeathScreenDetector() if handle_death else None
+        deaths = 0
 
-        for index, waypoint in enumerate(self.waypoints):
-            for attempt in range(waypoint.retries + 1):
-                frame = self._hold(backend, bindings, grab, waypoint.buttons,
-                                   waypoint.seconds, sleep, fps, steer)
-                if waypoint.checkpoint is None:
-                    result.attempts.append(attempt)
+        while True:
+            result = RouteResult(completed=True, deaths=deaths)
+            died = False
+            for index, waypoint in enumerate(self.waypoints):
+                for attempt in range(waypoint.retries + 1):
+                    frame, died = self._hold(backend, bindings, grab, waypoint.buttons,
+                                             waypoint.seconds, sleep, fps, steer, detector)
+                    if died:
+                        break
+                    if waypoint.checkpoint is None:
+                        result.attempts.append(attempt)
+                        break
+                    ok, score = waypoint.checkpoint.matches(frame)
+                    if ok:
+                        result.scores.append(score)
+                        result.attempts.append(attempt)
+                        break
+                    if attempt == waypoint.retries:
+                        backend.release_all()
+                        result.completed = False
+                        result.failed_at = index
+                        result.scores.append(score)
+                        return result
+                    for buttons, seconds in waypoint.unstick:
+                        _, died = self._hold(backend, bindings, grab, buttons, seconds,
+                                             sleep, fps, None, detector)
+                        if died:
+                            break
+                    if died:
+                        break
+                if died:
                     break
-                ok, score = waypoint.checkpoint.matches(frame)
-                if ok:
-                    result.scores.append(score)
-                    result.attempts.append(attempt)
-                    break
-                if attempt == waypoint.retries:
-                    backend.release_all()
-                    result.completed = False
-                    result.failed_at = index
-                    result.scores.append(score)
-                    return result
-                for buttons, seconds in waypoint.unstick:
-                    self._hold(backend, bindings, grab, buttons, seconds, sleep, fps, steer=None)
 
-        backend.release_all()
-        return result
+            if not died:
+                backend.release_all()
+                result.deaths = deaths
+                return result
 
-    def _hold(self, backend, bindings, grab, buttons, seconds, sleep, fps, steer):
-        """Hold buttons for ``seconds``, grabbing frames throughout."""
+            backend.release_all()
+            deaths += 1
+            if deaths > max_respawns:
+                result.completed = False
+                result.died_out = True
+                result.deaths = deaths
+                return result
+            sleep(respawn_wait_s)
+            detector.reset()
+            # falls through to the top of the while loop: restart at waypoint 0
+
+    def _hold(self, backend, bindings, grab, buttons, seconds, sleep, fps, steer, death_detector=None):
+        """Hold buttons for ``seconds``, grabbing frames throughout.
+
+        Returns ``(frame, died)``; stops early the moment ``death_detector``
+        (if given) confirms a death screen, since holding movement keys into a
+        death/reload screen accomplishes nothing.
+        """
         period = 1.0 / max(1e-6, fps)
         frames = max(1, int(round(seconds / period)))
         frame = None
@@ -196,8 +265,11 @@ class Route:
             backend.apply(held, bindings)
             sleep(period)
             frame = grab()
+            if death_detector is not None and death_detector.update(frame):
+                backend.release_all()
+                return frame, True
         backend.release_all()
-        return frame
+        return frame, False
 
     # ------------------------------------------------------------------
     def record(
@@ -222,8 +294,8 @@ class Route:
         sleep = sleep_fn if sleep_fn is not None else _time.sleep
         recorded = []
         for waypoint in self.waypoints:
-            frame = self._hold(backend, bindings, grab, waypoint.buttons,
-                               waypoint.seconds, sleep, fps, steer=None)
+            frame, _died = self._hold(backend, bindings, grab, waypoint.buttons,
+                                      waypoint.seconds, sleep, fps, steer=None)
             checkpoint = Checkpoint(
                 reference=normalised_patch(frame, region),
                 threshold=threshold,

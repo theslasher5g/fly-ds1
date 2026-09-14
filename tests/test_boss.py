@@ -256,3 +256,37 @@ def test_boss_env_runs_a_recorded_route_on_reset(tmp_path):
     assert "w" in pressed, "the recorded route should have walked forward"
     assert info["route"] is not None
     assert env.last_route_result is not None
+
+
+def test_boss_env_passes_death_handling_config_to_the_route():
+    """route_handle_death / route_max_respawns / wait_after_death_s must reach
+    Route.run, not just live as unused config -- verified by intercepting the
+    call rather than staging a real death, which needs a lot of fake frames."""
+    from unittest.mock import MagicMock
+
+    from flyds1.envs.navigation import Route, RouteResult, Waypoint
+
+    backend = DryRunBackend()
+    source = FakeFight(backend)
+    cfg = BossConfig(
+        target_fps=10_000.0, action_repeat=2, max_fight_steps=200, max_wait_steps=50,
+        wait_after_death_s=7.5, route_handle_death=False, route_max_respawns=9,
+        frame_width=64, frame_height=36,
+    )
+    env = BossFightEnv(cfg, DARKSOULS_ACTIONS, frame_source=source, input_backend=backend,
+                       sleep_fn=lambda _s: None)
+    env.route = Route(waypoints=(Waypoint(buttons=(), seconds=0.001),))
+    env.route.run = MagicMock(return_value=RouteResult(completed=True, deaths=2))
+
+    env.reset(options={"skip_macros": True})
+    env.state = "dead"
+    source.t = 0
+    source.finished = False
+    source.boss_hp = source.player_hp = 1.0
+    env.reset()
+
+    _, kwargs = env.route.run.call_args
+    assert kwargs["handle_death"] is False
+    assert kwargs["max_respawns"] == 9
+    assert kwargs["respawn_wait_s"] == 7.5
+    assert env.route_deaths == 2

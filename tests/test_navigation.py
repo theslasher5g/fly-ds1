@@ -166,3 +166,110 @@ def test_describe_reports_verification_coverage():
     )
     assert "2 verified" in recorded.describe()
     assert "0 verified" in build_route(2).describe()
+
+
+class DeathScreen:
+    """A dark, red-dominated frame matching flyds1.envs.detectors' test."""
+
+    def __call__(self, h: int = 90, w: int = 160) -> np.ndarray:
+        return np.tile(np.array([0.18, 0.02, 0.02]), (h, w, 1))
+
+
+class WalkWithHazard:
+    """A route that kills the walker partway through on the first N attempts,
+    then lets them through -- like a skeleton that eventually gets outrun."""
+
+    def __init__(self, places: list[int], die_after_step: int, survive_from_attempt: int):
+        self.places = places
+        self.die_after_step = die_after_step
+        self.survive_from_attempt = survive_from_attempt
+        self.attempt = 0
+        self.frames = 0
+        self.rng = np.random.default_rng(0)
+
+    def grab(self) -> np.ndarray:
+        self.frames += 1
+        if (
+            self.attempt < self.survive_from_attempt
+            and self.frames > self.die_after_step
+        ):
+            return (DeathScreen()() * 255).astype(np.uint8)
+        index = min((self.frames - 1) // 3, len(self.places) - 1)
+        return jitter(place(self.places[index]), self.rng)
+
+    def restart(self) -> None:
+        self.attempt += 1
+        self.frames = 0
+
+
+def test_death_along_the_route_restarts_from_the_beginning():
+    """Regression: a route that runs past a live enemy will occasionally die,
+    and Dark Souls respawns at the bonfire -- the route's own start -- so that
+    must be handled as a restart, not confused for a lost route."""
+    backend = DryRunBackend()
+    setup = Walk([70, 71, 72])
+    recorded = build_route(3).record(
+        backend, BINDINGS, setup.grab, sleep_fn=lambda _s: None, fps=30.0
+    )
+
+    hazard = WalkWithHazard([70, 71, 72], die_after_step=5, survive_from_attempt=1)
+    calls = {"n": 0}
+
+    def grab_and_restart():
+        calls["n"] += 1
+        return hazard.grab()
+
+    def sleep_and_notice_respawn(seconds):
+        if seconds >= 1.0:  # the respawn_wait_s call, not a per-frame sleep
+            hazard.restart()
+
+    result = recorded.run(
+        DryRunBackend(), BINDINGS, grab_and_restart,
+        sleep_fn=sleep_and_notice_respawn, fps=30.0,
+        respawn_wait_s=5.0, max_respawns=3,
+    )
+    assert result.completed
+    assert result.deaths == 1
+    assert "died 1x" in result.describe()
+
+
+def test_route_gives_up_after_too_many_deaths():
+    backend = DryRunBackend()
+    setup = Walk([80, 81])
+    recorded = build_route(2).record(
+        backend, BINDINGS, setup.grab, sleep_fn=lambda _s: None, fps=30.0
+    )
+
+    hazard = WalkWithHazard([80, 81], die_after_step=2, survive_from_attempt=999)
+
+    def sleep_and_restart(seconds):
+        if seconds >= 1.0:
+            hazard.restart()
+
+    result = recorded.run(
+        DryRunBackend(), BINDINGS, hazard.grab,
+        sleep_fn=sleep_and_restart, fps=30.0,
+        respawn_wait_s=1.0, max_respawns=2,
+    )
+    assert not result.completed
+    assert result.died_out is True
+    assert result.deaths == 3  # the original attempt plus 2 more before giving up
+    assert "abandoned after dying" in result.describe()
+
+
+def test_death_handling_can_be_disabled():
+    """With handle_death=False, a death screen just fails checkpoint matching
+    like any other mismatch -- reported as lost, not retried forever."""
+    backend = DryRunBackend()
+    setup = Walk([90, 91])
+    recorded = build_route(2).record(
+        backend, BINDINGS, setup.grab, sleep_fn=lambda _s: None, fps=30.0
+    )
+    hazard = WalkWithHazard([90, 91], die_after_step=0, survive_from_attempt=999)
+    result = recorded.run(
+        DryRunBackend(), BINDINGS, hazard.grab,
+        sleep_fn=lambda _s: None, fps=30.0, handle_death=False,
+    )
+    assert not result.completed
+    assert result.deaths == 0
+    assert not result.died_out

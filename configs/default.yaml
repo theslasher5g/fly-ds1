@@ -144,6 +144,8 @@ env:
         - 2.0
       name: through the fog gate
     route_path: null
+    route_handle_death: true
+    route_max_respawns: 3
     detectors:
       player_hp:
         x0: 0.035

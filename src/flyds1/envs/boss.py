@@ -134,6 +134,14 @@ class BossConfig:
     #: set it replaces the blind ``runback``/``enter_fog`` macros: same idea,
     #: but it notices when it has gone wrong.
     route_path: str | None = None
+    #: Dying to something along the route (a skeleton on the way to a boss,
+    #: say) is treated as a restart, not a failure -- see flyds1.envs.navigation.
+    #: Disable only if the route genuinely never passes anything that can kill
+    #: the character.
+    route_handle_death: bool = True
+    #: How many times the route is willing to die and restart before giving up
+    #: on the attempt entirely.
+    route_max_respawns: int = 3
 
     detectors: DetectorConfig = field(default_factory=DetectorConfig)
     reward: BossRewardConfig = field(default_factory=BossRewardConfig)
@@ -175,6 +183,7 @@ class BossFightEnv(gym.Env):
         #: Result of the most recent run-back, or None if it was not run.
         self.last_route_result = None
         self.routes_lost = 0
+        self.route_deaths = 0
 
         self.action_space = self.spec_actions.gym_space()
         self.observation_space = spaces.Box(
@@ -269,6 +278,7 @@ class BossFightEnv(gym.Env):
             "attempts": self.attempts,
             "kills": self.kills,
             "routes_lost": self.routes_lost,
+            "route_deaths": self.route_deaths,
             "route": self.last_route_result.describe() if self.last_route_result else None,
         }
         return frames[-1], info
@@ -287,7 +297,11 @@ class BossFightEnv(gym.Env):
                 sleep_fn=self._sleep,
                 fps=self.cfg.target_fps,
                 steer=steer,
+                handle_death=self.cfg.route_handle_death,
+                respawn_wait_s=self.cfg.wait_after_death_s,
+                max_respawns=self.cfg.route_max_respawns,
             )
+            self.route_deaths += self.last_route_result.deaths
             if not self.last_route_result.completed:
                 self.routes_lost += 1
             return

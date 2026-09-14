@@ -199,3 +199,22 @@ SOULS™: REMASTERED"). Override it for a different game with
 `--set env.game.window_name=...` (or `env.boss.window_name`); setting it to
 `None` disables the guard entirely, which is never the right call for normal
 use.
+
+## Dying past enemies on the route is expected, not a failure
+
+A route that runs past live enemies -- skeletons on the way to a boss -- will
+occasionally get the character killed. Dark Souls' own answer to that is to
+respawn at the last bonfire, which for a run-back is the route's own starting
+point, so the fix is not "teach the agent to dodge or fight" (a much larger,
+unproven claim -- see `docs/results.md` on how little steering information this
+pipeline has been shown to extract even from a plain visual target) but
+"recognise the death screen, wait out the reload, start the route over."
+`Route.run` does this by default (`handle_death=True`), up to
+`route_max_respawns` times (default 3, configured via `env.boss.*`) before
+giving up on the attempt as `died_out` rather than looping forever.
+
+The practical recipe for a route through a hazard like the graveyard skeletons
+on the way to Pinwheel: include `sprint_roll` in the relevant waypoints'
+buttons so the character runs rather than walks, do not script any fighting,
+and let the occasional death be absorbed by the respawn-and-restart above --
+this is also the standard human strategy at that point in the game.
