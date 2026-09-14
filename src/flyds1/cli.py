@@ -436,13 +436,23 @@ def cmd_live(args) -> int:
     # those decisions ever reached the game: the loop runs, "steps" climbs,
     # and the character stands still because every key press was suppressed
     # on purpose. Say so loudly rather than let that be a silent default.
-    dry_run = getattr(getattr(cfg.env, cfg.env.kind, None), "dry_run", None)
+    env_cfg = getattr(cfg.env, cfg.env.kind, None)
+    dry_run = getattr(env_cfg, "dry_run", None)
     if dry_run is True:
         print(f"DRY RUN: env.{cfg.env.kind}.dry_run is true, so no keys are being sent -- "
               "the character will not move no matter what the DN panel does. "
               f"Add --set env.{cfg.env.kind}.dry_run=false to actually play.")
     elif dry_run is False:
-        print(f"LIVE INPUT: env.{cfg.env.kind}.dry_run is false -- keys ARE being sent to the game.")
+        # dry_run=False alone is not the whole story: an explicit
+        # input_backend="dry" still forces DryRunBackend underneath (see
+        # ScreenGameEnv/BossFightEnv), so check that too rather than print a
+        # LIVE INPUT notice that would not be true.
+        if getattr(env_cfg, "input_backend", None) == "dry":
+            print(f"DRY RUN: env.{cfg.env.kind}.dry_run is false, but "
+                  f"env.{cfg.env.kind}.input_backend is explicitly 'dry', so no keys "
+                  f"are being sent. Set it to 'auto' (or remove the override) to play.")
+        else:
+            print(f"LIVE INPUT: env.{cfg.env.kind}.dry_run is false -- keys ARE being sent to the game.")
 
     front_end = retina.front_end
     side = sorted(front_end.eyes)[-1]

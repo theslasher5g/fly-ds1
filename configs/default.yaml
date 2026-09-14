@@ -93,7 +93,7 @@ env:
       monitor: 1
     frame_source: dummy
     replay_path: null
-    input_backend: dry
+    input_backend: auto
     window_name: null
     dry_run: true
     target_fps: 30.0
@@ -119,7 +119,7 @@ env:
       monitor: 1
     frame_source: dummy
     replay_path: null
-    input_backend: dry
+    input_backend: auto
     window_name: null
     dry_run: true
     target_fps: 30.0

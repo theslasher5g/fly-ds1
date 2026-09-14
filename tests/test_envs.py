@@ -250,3 +250,39 @@ def test_survive_task_still_works():
     assert "enemy_distance" in info
     _, info = _episode(env, lambda _e: np.array([1, 0, 0, 0], dtype=np.int8), seed=1)
     assert info["steps"] == 60 or info["hp"] <= 0
+
+
+def test_dry_run_false_alone_is_enough_to_select_a_real_backend(monkeypatch):
+    """Regression: input_backend defaulted to the string "dry" as its own
+    field, independently of dry_run. Someone flipping dry_run=False without
+    also touching input_backend -- exactly what the dry-run notice tells them
+    to do -- still got a DryRunBackend and silently sent nothing."""
+    from flyds1.envs.game import GameConfig, ScreenGameEnv
+
+    captured = {}
+
+    def fake_make_input_backend(kind, window=None):
+        captured["kind"] = kind
+        from flyds1.envs.input_backends import DryRunBackend
+
+        return DryRunBackend()
+
+    monkeypatch.setattr("flyds1.envs.game.make_input_backend", fake_make_input_backend)
+    ScreenGameEnv(GameConfig(frame_source="dummy", dry_run=False))
+    assert captured["kind"] != "dry"
+
+
+def test_dry_run_true_forces_dry_regardless_of_input_backend(monkeypatch):
+    from flyds1.envs.game import GameConfig, ScreenGameEnv
+
+    captured = {}
+
+    def fake_make_input_backend(kind, window=None):
+        captured["kind"] = kind
+        from flyds1.envs.input_backends import DryRunBackend
+
+        return DryRunBackend()
+
+    monkeypatch.setattr("flyds1.envs.game.make_input_backend", fake_make_input_backend)
+    ScreenGameEnv(GameConfig(frame_source="dummy", dry_run=True, input_backend="xdotool"))
+    assert captured["kind"] == "dry"

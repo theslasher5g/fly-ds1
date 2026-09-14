@@ -61,9 +61,14 @@ class GameConfig:
     capture: CaptureRegion = field(default_factory=CaptureRegion)
     frame_source: str = "dummy"        # "mss" live, "replay" from a recording
     replay_path: str | None = None     # folder of frames or .npy stack
-    input_backend: str = "dry"         # "auto" / "pydirectinput" / "xdotool"
+    #: "auto" picks pydirectinput on Windows, xdotool on Linux. dry_run is the
+    #: single switch for whether input is sent at all; this only chooses which
+    #: real backend to use once dry_run=False (an explicit "dry" here still
+    #: forces DryRunBackend even if dry_run were somehow False, but there is
+    #: no reason to set that -- use dry_run for that).
+    input_backend: str = "auto"
     window_name: str | None = None     # for xdotool targeting
-    dry_run: bool = True               # True: never send input
+    dry_run: bool = True               # True: never send input, regardless of input_backend
     target_fps: float = 30.0
     frame_width: int = 320             # resolution handed to the retina
     frame_height: int = 180

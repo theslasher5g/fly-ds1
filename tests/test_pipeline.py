@@ -255,10 +255,19 @@ def test_no_warning_when_overrides_match_the_env_kind(capsys):
     assert capsys.readouterr().err == ""
 
 
-def test_live_warns_about_dry_run(capsys):
+def test_live_warns_about_dry_run(capsys, monkeypatch):
     """Regression: dry_run defaults to True on the game/boss envs, and the
     live loop ran, "steps" climbed, and the character stood still with no
     indication why -- every key press was suppressed on purpose, silently."""
+    from flyds1.envs.input_backends import DryRunBackend
+
+    # dry_run=False makes ScreenGameEnv construct a *real* input backend
+    # ("auto" resolves to xdotool/pydirectinput), which is exactly the point
+    # of that default -- but it means this test needs a stand-in wherever no
+    # such backend exists (this container has neither).  What is under test
+    # here is the printed notice, not backend construction.
+    monkeypatch.setattr("flyds1.envs.game.make_input_backend", lambda *a, **k: DryRunBackend())
+
     args = []
     for key, value in SMALL.items():
         args += ["--set", f"{key}={value}"]
@@ -272,6 +281,13 @@ def test_live_warns_about_dry_run(capsys):
                 "live", "--episodes", "1", "--port", "0") == 0
     out = capsys.readouterr().out
     assert "LIVE INPUT" in out and "keys ARE being sent" in out
+
+    # dry_run=False but input_backend explicitly "dry" must not claim otherwise
+    assert _cli(*args, "--set", "env.game.dry_run=false", "--set", "env.game.input_backend=dry",
+                "live", "--episodes", "1", "--port", "0") == 0
+    out = capsys.readouterr().out
+    assert "DRY RUN" in out and "input_backend is explicitly 'dry'" in out
+    assert "LIVE INPUT" not in out
 
 
 def test_live_says_nothing_about_dry_run_for_the_arena(capsys):

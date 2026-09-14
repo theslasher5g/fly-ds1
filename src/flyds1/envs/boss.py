@@ -108,7 +108,10 @@ class BossConfig:
     capture: CaptureRegion = field(default_factory=CaptureRegion)
     frame_source: str = "dummy"
     replay_path: str | None = None
-    input_backend: str = "dry"
+    #: "auto" picks pydirectinput on Windows, xdotool on Linux. dry_run is the
+    #: single switch for whether input is sent at all -- see GameConfig for why
+    #: this does not also default to "dry".
+    input_backend: str = "auto"
     window_name: str | None = None
     dry_run: bool = True
 
