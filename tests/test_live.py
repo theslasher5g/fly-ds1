@@ -1,10 +1,8 @@
 """The live viewer: files on disk, a server, and no effect on the run."""
 
-import json
 import urllib.request
 
 import numpy as np
-import pytest
 
 from flyds1.live import LiveView, format_stats
 
@@ -58,5 +56,5 @@ def test_stats_formatting():
 
 
 def test_page_refresh_interval_is_embedded(tmp_path):
-    view = LiveView(tmp_path, refresh_ms=123)
+    LiveView(tmp_path, refresh_ms=123)
     assert "123" in (tmp_path / "index.html").read_text()
