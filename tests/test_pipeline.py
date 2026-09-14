@@ -253,3 +253,31 @@ def test_no_warning_when_overrides_match_the_env_kind(capsys):
 
     _load_config(Args())
     assert capsys.readouterr().err == ""
+
+
+def test_live_warns_about_dry_run(capsys):
+    """Regression: dry_run defaults to True on the game/boss envs, and the
+    live loop ran, "steps" climbed, and the character stood still with no
+    indication why -- every key press was suppressed on purpose, silently."""
+    args = []
+    for key, value in SMALL.items():
+        args += ["--set", f"{key}={value}"]
+    args += ["--set", "env.kind=game", "--set", "env.game.max_steps=2"]
+
+    assert _cli(*args, "live", "--episodes", "1", "--port", "0") == 0
+    out = capsys.readouterr().out
+    assert "DRY RUN" in out and "no keys are being sent" in out
+
+    assert _cli(*args, "--set", "env.game.dry_run=false",
+                "live", "--episodes", "1", "--port", "0") == 0
+    out = capsys.readouterr().out
+    assert "LIVE INPUT" in out and "keys ARE being sent" in out
+
+
+def test_live_says_nothing_about_dry_run_for_the_arena(capsys):
+    args = []
+    for key, value in SMALL.items():
+        args += ["--set", f"{key}={value}"]
+    assert _cli(*args, "live", "--episodes", "1", "--port", "0") == 0
+    out = capsys.readouterr().out
+    assert "DRY RUN" not in out and "LIVE INPUT" not in out

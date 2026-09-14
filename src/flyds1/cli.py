@@ -431,6 +431,19 @@ def cmd_live(args) -> int:
     # only if asked -- without this the viewer's first panel is black
     retina.keep_frame_in_info = True
 
+    # dry_run defaults to True on both the game and boss envs, and it is easy
+    # to watch the DN panel move for minutes without noticing that not one of
+    # those decisions ever reached the game: the loop runs, "steps" climbs,
+    # and the character stands still because every key press was suppressed
+    # on purpose. Say so loudly rather than let that be a silent default.
+    dry_run = getattr(getattr(cfg.env, cfg.env.kind, None), "dry_run", None)
+    if dry_run is True:
+        print(f"DRY RUN: env.{cfg.env.kind}.dry_run is true, so no keys are being sent -- "
+              "the character will not move no matter what the DN panel does. "
+              f"Add --set env.{cfg.env.kind}.dry_run=false to actually play.")
+    elif dry_run is False:
+        print(f"LIVE INPUT: env.{cfg.env.kind}.dry_run is false -- keys ARE being sent to the game.")
+
     front_end = retina.front_end
     side = sorted(front_end.eyes)[-1]
     eye = front_end.eyes[side]
