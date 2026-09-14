@@ -1,0 +1,127 @@
+connectome:
+  spec: synthetic:rings=6
+  min_synapse_count: 5.0
+  normalise: in_degree
+  gain: 3.0
+  drop_modulatory: true
+  keep_largest_component: false
+  cache: null
+rate:
+  dt: 0.004166666666666667
+  activation: relu
+  softplus_beta: 4.0
+  v_init: 0.0
+  rate_clip: 100.0
+  steps_per_frame: 4
+frontend:
+  screen:
+    width: 320
+    height: 180
+    fov_h_deg: 90.0
+  acceptance_fwhm_deg: 5.7
+  eye_azimuth_offset_deg: 15.0
+  spacing_deg: 5.0
+  reichardt:
+    tau_delay: 0.035
+    tau_adapt: 0.25
+    contrast_eps: 0.05
+    on_off_split: true
+    gain: 1.0
+  motion_mode: retinotopic
+  adapt_contrast: true
+  contrast_tau: 0.25
+  contrast_eps: 0.05
+encoder:
+  inject_motion: true
+  per_facet_gain: true
+  init_photo_gain: 1.0
+  init_motion_gain: 1.0
+trainable:
+  bias: false
+  plastic_edges: 0
+  plastic_init_std: 0.01
+  neuron_gain: false
+  seed: 0
+env:
+  kind: arena
+  brain_location: policy
+  stack_k: 6
+  arena:
+    width: 320
+    height: 180
+    fov_h_deg: 90.0
+    tile_map:
+    - '################'
+    - '#..............#'
+    - '#..##......##..#'
+    - '#..##......##..#'
+    - '#..............#'
+    - '#....######....#'
+    - '#....#....#....#'
+    - '#....#....#....#'
+    - '#....######....#'
+    - '#..............#'
+    - '#..##......##..#'
+    - '#..##......##..#'
+    - '#..............#'
+    - '################'
+    dt: 0.03333333333333333
+    max_steps: 900
+    move_speed: 2.5
+    turn_speed: 2.4
+    enemy_speed: 1.6
+    enemy_damage: 35.0
+    contact_range: 0.9
+    start_hp: 100.0
+    reward_progress: 0.05
+    reward_survival: 0.02
+    reward_damage: 0.2
+    reward_death: 10.0
+    reward_wall_bump: 0.05
+    seed: 0
+  game:
+    capture:
+      left: 0
+      top: 0
+      width: 1280
+      height: 720
+      monitor: 1
+    frame_source: dummy
+    input_backend: dry
+    window_name: null
+    dry_run: true
+    target_fps: 30.0
+    frame_width: 320
+    frame_height: 180
+    max_steps: 3600
+    terminate_on_death: true
+    respawn_wait_s: 8.0
+    warmup_frames: 3
+    reward:
+      survival: 0.01
+      player_damage: 2.0
+      boss_damage: 10.0
+      progress: 0.5
+      death: 5.0
+      boss_kill: 20.0
+training:
+  total_timesteps: 200000
+  n_envs: 4
+  n_steps: 256
+  batch_size: 256
+  n_epochs: 4
+  learning_rate: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.005
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  seed: 0
+  out_dir: runs/fly
+  save_every: 0
+  value_net_arch:
+  - 64
+  - 64
+  device: auto
+  normalize_reward: true
