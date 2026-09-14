@@ -495,7 +495,15 @@ def cmd_route(args) -> int:
     bindings = {b.name: b.key for b in spec.buttons}
 
     if args.steps:
-        data = yaml.safe_load(Path(args.steps).read_text())
+        steps_path = Path(args.steps)
+        if not steps_path.exists():
+            example = Path(__file__).resolve().parents[2] / "configs" / "route_asylum.yaml"
+            hint = f" (the repository ships one at {example})" if example.exists() else ""
+            raise FileNotFoundError(
+                f"no waypoint file at {steps_path}{hint}. "
+                "Omit --steps entirely to record the built-in placeholder route instead."
+            )
+        data = yaml.safe_load(steps_path.read_text())
         route = Route(
             waypoints=tuple(
                 Waypoint(

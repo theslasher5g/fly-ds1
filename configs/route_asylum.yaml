@@ -1,0 +1,24 @@
+# Run-back from the Undead Asylum bonfire to the Asylum Demon fog gate.
+#
+# These timings are a starting point, not a measurement -- your character's
+# speed, your frame rate and where exactly you stand all change them. Walk the
+# route yourself with a stopwatch once, adjust the seconds, then record:
+#
+#   flyds1 route --steps configs/route_asylum.yaml --record route.npz --source mss
+#
+# Buttons are names from the action spec (flyds1.motor.actions):
+#   forward, back, left, right, sprint_roll, attack, block, lock_on, heal
+name: undead asylum -> asylum demon
+waypoints:
+  - name: out of the bonfire room
+    buttons: [forward]
+    seconds: 4.0
+  - name: turn to the stairs
+    buttons: [forward, right]
+    seconds: 1.0
+  - name: up the stairs
+    buttons: [forward]
+    seconds: 3.5
+  - name: through the fog
+    buttons: [forward]
+    seconds: 2.0
