@@ -288,10 +288,10 @@ def cmd_train(args) -> int:
         venv = VecNormalize(venv, norm_obs=False, norm_reward=True, gamma=cfg.training.gamma)
     _, layout = make_env(cfg, net, seed=cfg.training.seed)
     model = make_model(cfg, venv, net, layout)
-    if hasattr(model.policy, "features_extractor") and hasattr(
-        model.policy.features_extractor, "describe"
-    ):
-        print(model.policy.features_extractor.describe())
+    for holder in (model.policy, getattr(model.policy, "pi_features_extractor", None)):
+        if hasattr(holder, "describe"):
+            print(holder.describe())
+            break
     t0 = time.perf_counter()
     model.learn(total_timesteps=cfg.training.total_timesteps, progress_bar=False)
     elapsed = time.perf_counter() - t0

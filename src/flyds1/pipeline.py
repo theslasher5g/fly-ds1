@@ -126,9 +126,10 @@ def make_model(cfg: ExperimentConfig, env, network: WiredNetwork, layout: ObsLay
     from stable_baselines3 import PPO
 
     train = cfg.training
+    policy: type | str = "MlpPolicy"
     kwargs: dict = {}
     if cfg.env.brain_location == "policy":
-        from flyds1.agent.fly_policy import fly_policy_kwargs
+        from flyds1.agent.fly_policy import FlyActorCriticPolicy, fly_policy_kwargs
 
         kwargs = fly_policy_kwargs(
             network,
@@ -137,13 +138,16 @@ def make_model(cfg: ExperimentConfig, env, network: WiredNetwork, layout: ObsLay
             trainable=cfg.trainable,
             inject_motion=cfg.encoder.inject_motion,
             value_net_arch=list(train.value_net_arch),
+            critic_sees=train.critic_sees,
         )
+        if train.critic_sees == "observation":
+            policy = FlyActorCriticPolicy
     else:
         # the brain runs in the env; the policy is the linear decoder plus value net
         kwargs = {"net_arch": {"pi": [], "vf": list(train.value_net_arch)}}
 
     return PPO(
-        "MlpPolicy",
+        policy,
         env,
         learning_rate=train.learning_rate,
         n_steps=train.n_steps,

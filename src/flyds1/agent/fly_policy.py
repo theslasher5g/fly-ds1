@@ -24,15 +24,20 @@ from flyds1.vision.encoder import DriveEncoder, build_encoder_wiring
 from flyds1.vision.frontend import ObsLayout
 
 try:
+    import numpy as np
     import torch
     import torch.nn as nn
-    from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+    from stable_baselines3.common.policies import ActorCriticPolicy
+    from stable_baselines3.common.torch_layers import BaseFeaturesExtractor, create_mlp
 
     _SB3_AVAILABLE = True
 except ImportError:  # pragma: no cover - optional dependency
     _SB3_AVAILABLE = False
 
     class BaseFeaturesExtractor:  # type: ignore[no-redef]
+        pass
+
+    class ActorCriticPolicy:  # type: ignore[no-redef]
         pass
 
     torch = None  # type: ignore[assignment]
@@ -120,6 +125,96 @@ class FlyBrainExtractor(BaseFeaturesExtractor):
         )
 
 
+class RawObservationExtractor(BaseFeaturesExtractor):
+    """The critic's view: the observation itself, flattened.
+
+    The value function is not part of the animal -- it is bookkeeping the RL
+    algorithm needs -- so there is no reason to squeeze it through the same
+    descending-neuron bottleneck as the policy.  Doing so makes it estimate
+    returns from 8-24 numbers that have already thrown most of the scene away,
+    and a critic that cannot predict the return turns every advantage into
+    noise.
+    """
+
+    def __init__(self, observation_space) -> None:
+        if not _SB3_AVAILABLE:  # pragma: no cover - optional dependency
+            raise ImportError("needs stable-baselines3: pip install -e '.[rl]'")
+        super().__init__(observation_space, features_dim=int(np.prod(observation_space.shape)))
+        self.flatten = nn.Flatten()
+
+    def forward(self, observations: "torch.Tensor") -> "torch.Tensor":
+        return self.flatten(observations)
+
+
+class SplitMlpExtractor(nn.Module):
+    """Like SB3's ``MlpExtractor``, but actor and critic may differ in width.
+
+    SB3's own version takes a single ``feature_dim`` for both heads, which rules
+    out an actor reading 24 descending neurons and a critic reading the whole
+    observation.
+    """
+
+    def __init__(self, pi_dim: int, vf_dim: int, net_arch: dict, activation_fn) -> None:
+        super().__init__()
+        arch_pi = list(net_arch.get("pi", []))
+        arch_vf = list(net_arch.get("vf", []))
+        self.policy_net = nn.Sequential(*create_mlp(pi_dim, -1, arch_pi, activation_fn))
+        self.value_net = nn.Sequential(*create_mlp(vf_dim, -1, arch_vf, activation_fn))
+        self.latent_dim_pi = arch_pi[-1] if arch_pi else pi_dim
+        self.latent_dim_vf = arch_vf[-1] if arch_vf else vf_dim
+
+    def forward(self, features):  # pragma: no cover - only used when sharing
+        return self.forward_actor(features), self.forward_critic(features)
+
+    def forward_actor(self, features: "torch.Tensor") -> "torch.Tensor":
+        return self.policy_net(features)
+
+    def forward_critic(self, features: "torch.Tensor") -> "torch.Tensor":
+        return self.value_net(features)
+
+
+class FlyActorCriticPolicy(ActorCriticPolicy):
+    """Actor through the connectome, critic straight off the observation.
+
+    Use via ``PPO(FlyActorCriticPolicy, env, policy_kwargs=fly_policy_kwargs(...,
+    critic_sees="observation"))``.
+    """
+
+    def __init__(self, observation_space, action_space, lr_schedule, *args, **kwargs):
+        if not _SB3_AVAILABLE:  # pragma: no cover - optional dependency
+            raise ImportError("needs stable-baselines3: pip install -e '.[rl]'")
+        kwargs["share_features_extractor"] = False
+        kwargs.setdefault("features_extractor_class", FlyBrainExtractor)
+        # SB3 builds the actor's extractor first and the critic's second (see
+        # ActorCriticPolicy.__init__); the counter is how we hand out a
+        # different class for the second call without constructing a whole
+        # second connectome and throwing it away.
+        self._extractor_calls = 0
+        super().__init__(observation_space, action_space, lr_schedule, *args, **kwargs)
+
+    def make_features_extractor(self):
+        self._extractor_calls += 1
+        if self._extractor_calls == 1:
+            return super().make_features_extractor()
+        return RawObservationExtractor(self.observation_space)
+
+    def _build_mlp_extractor(self) -> None:
+        net_arch = self.net_arch if isinstance(self.net_arch, dict) else {"pi": self.net_arch, "vf": self.net_arch}
+        self.mlp_extractor = SplitMlpExtractor(
+            pi_dim=self.pi_features_extractor.features_dim,
+            vf_dim=self.vf_features_extractor.features_dim,
+            net_arch=net_arch,
+            activation_fn=self.activation_fn,
+        ).to(self.device)
+
+    def describe(self) -> str:
+        return (
+            f"{self.pi_features_extractor.describe()}\n"
+            f"  critic reads the raw observation "
+            f"({self.vf_features_extractor.features_dim} numbers), not the DN bottleneck"
+        )
+
+
 def fly_policy_kwargs(
     network: WiredNetwork,
     layout: ObsLayout,
@@ -128,13 +223,24 @@ def fly_policy_kwargs(
     trainable: TrainableParts | None = None,
     inject_motion: bool = True,
     value_net_arch: list[int] | None = None,
+    critic_sees: str = "observation",
 ) -> dict:
-    """``policy_kwargs`` for ``PPO("MlpPolicy", env, **fly_policy_kwargs(...))``.
+    """``policy_kwargs`` for PPO.
 
-    ``net_arch`` gives the policy head no hidden layers (the linear decoder) and
-    the value head a small MLP.
+    ``net_arch`` gives the policy head no hidden layers -- that head *is* the
+    linear decoder of step 5 -- and the value head a small MLP.
+
+    ``critic_sees``:
+
+    * ``"observation"`` (default) -- pair with :class:`FlyActorCriticPolicy`:
+      the critic reads the raw observation while the actor goes through the
+      connectome.
+    * ``"features"`` -- pair with ``"MlpPolicy"``: both read the descending
+      neurons. Simpler, and a much harder job for the critic.
     """
-    return {
+    if critic_sees not in ("observation", "features"):
+        raise ValueError(f"critic_sees must be 'observation' or 'features', got {critic_sees!r}")
+    kwargs = {
         "features_extractor_class": FlyBrainExtractor,
         "features_extractor_kwargs": {
             "network": network,
@@ -144,8 +250,16 @@ def fly_policy_kwargs(
             "inject_motion": inject_motion,
         },
         "net_arch": {"pi": [], "vf": value_net_arch or [64, 64]},
-        "share_features_extractor": True,
     }
+    if critic_sees == "features":
+        kwargs["share_features_extractor"] = True
+    return kwargs
 
 
-__all__ = ["FlyBrainExtractor", "fly_policy_kwargs"]
+__all__ = [
+    "FlyActorCriticPolicy",
+    "FlyBrainExtractor",
+    "RawObservationExtractor",
+    "SplitMlpExtractor",
+    "fly_policy_kwargs",
+]

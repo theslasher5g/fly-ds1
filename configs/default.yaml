@@ -125,3 +125,4 @@ training:
   - 64
   device: auto
   normalize_reward: true
+  critic_sees: observation

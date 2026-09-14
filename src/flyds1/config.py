@@ -90,6 +90,11 @@ class TrainingSection:
     #: target left ``explained_variance`` negative -- i.e. the critic was worse
     #: than predicting the mean, so every advantage was noise.
     normalize_reward: bool = True
+    #: Who the value function reads: "observation" (its own view of the raw
+    #: observation, via FlyActorCriticPolicy) or "features" (the same descending
+    #: neurons as the policy). The critic is not part of the animal, so the
+    #: bottleneck only costs accuracy -- see docs/results.md.
+    critic_sees: str = "observation"
 
 
 @dataclass

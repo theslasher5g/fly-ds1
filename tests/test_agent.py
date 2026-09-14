@@ -170,3 +170,56 @@ def test_stack_wrapper_pads_the_first_step(network):
     obs, _ = env.reset(seed=0)
     assert obs.shape[0] == 4
     assert np.allclose(obs[0], obs[-1])  # padded with the first frame
+
+
+def test_critic_reads_the_raw_observation(network):
+    """The value function must not be squeezed through the DN bottleneck."""
+    from stable_baselines3 import PPO
+
+    from flyds1.agent.fly_policy import (
+        FlyActorCriticPolicy,
+        RawObservationExtractor,
+        fly_policy_kwargs,
+    )
+
+    base = RetinaWrapper(FlyArenaEnv(SMALL_ARENA), network, FrontEndConfig(motion_mode="pooled"))
+    env = ObsStackWrapper(base, k=2)
+    model = PPO(
+        FlyActorCriticPolicy,
+        env,
+        n_steps=32,
+        batch_size=16,
+        n_epochs=1,
+        seed=0,
+        policy_kwargs=fly_policy_kwargs(
+            network, base.layout, value_net_arch=[16], critic_sees="observation"
+        ),
+    )
+    policy = model.policy
+    from flyds1.agent.fly_policy import FlyBrainExtractor
+
+    assert isinstance(policy.pi_features_extractor, FlyBrainExtractor)
+    assert isinstance(policy.vf_features_extractor, RawObservationExtractor)
+    assert policy.pi_features_extractor.features_dim == network.n_outputs
+    assert policy.vf_features_extractor.features_dim == 2 * base.front_end.obs_size
+
+    # the actor's head is the linear decoder: straight from DN rates to actions
+    assert policy.mlp_extractor.latent_dim_pi == network.n_outputs
+    assert policy.action_net.in_features == network.n_outputs
+
+    model.learn(total_timesteps=64)
+    grads = {
+        "encoder": policy.pi_features_extractor.encoder.photo_gain.grad,
+        "decoder": policy.action_net.weight.grad,
+        "value": policy.value_net.weight.grad,
+    }
+    for name, grad in grads.items():
+        assert grad is not None and torch.isfinite(grad).all(), f"{name} got no usable gradient"
+
+
+def test_fly_policy_kwargs_rejects_an_unknown_critic_mode(network):
+    from flyds1.agent.fly_policy import fly_policy_kwargs
+
+    base = RetinaWrapper(FlyArenaEnv(SMALL_ARENA), network, FrontEndConfig(motion_mode="pooled"))
+    with pytest.raises(ValueError, match="critic_sees"):
+        fly_policy_kwargs(network, base.layout, critic_sees="nonsense")
