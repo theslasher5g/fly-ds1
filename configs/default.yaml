@@ -1,5 +1,5 @@
 connectome:
-  spec: synthetic:rings=6
+  spec: synthetic:rings=15
   min_synapse_count: 5.0
   normalise: in_degree
   gain: 3.0

@@ -184,3 +184,43 @@ def test_retina_wrapper_exposes_its_last_observation(tmp_path):
     assert retina.last_observation.shape == (retina.front_end.obs_size,)
     assert retina.last_observation.any()
     assert not np.array_equal(first, retina.last_observation)
+
+
+def test_facet_layout_is_cached_between_renders():
+    """Regression: the pixel->facet assignment was rebuilt every frame, which
+    at a real fly's 721 facets per eye meant seconds per panel, not
+    milliseconds."""
+    import time
+
+    from flyds1.hexlattice import hex_lattice
+    from flyds1.plotting import _FACET_LAYOUTS, facet_image
+
+    _FACET_LAYOUTS.clear()
+    _, coords = hex_lattice(rings=6, spacing=5.0)
+    values = np.random.default_rng(0).normal(size=len(coords))
+
+    first = facet_image(coords, values, size=80, signed=True)
+    assert len(_FACET_LAYOUTS) == 1
+
+    start = time.perf_counter()
+    again = facet_image(coords, values, size=80, signed=True)
+    cached_seconds = time.perf_counter() - start
+
+    assert np.array_equal(first, again)
+    assert len(_FACET_LAYOUTS) == 1, "a second render must reuse the layout"
+    assert cached_seconds < 0.05
+
+    facet_image(coords, values, size=120, signed=True)
+    assert len(_FACET_LAYOUTS) == 2, "a different size needs its own layout"
+
+
+def test_default_config_uses_a_real_fly_eye():
+    """The default eye should be the animal's, not a convenient fraction of it."""
+    from flyds1.connectome.loader import load_connectome
+    from flyds1.vision.frontend import DROSOPHILA_OMMATIDIA_PER_EYE
+
+    cfg = ExperimentConfig()
+    connectome = load_connectome(cfg.connectome.spec)
+    photoreceptors = connectome.neurons.photoreceptor_mask()
+    per_eye = photoreceptors.sum() / 2
+    assert per_eye / DROSOPHILA_OMMATIDIA_PER_EYE > 0.9

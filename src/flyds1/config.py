@@ -27,7 +27,13 @@ from flyds1.vision.frontend import FrontEndConfig
 class ConnectomeSection:
     """Step 1 + 2a: where the graph comes from and how it is scaled."""
 
-    spec: str = "synthetic:rings=6"
+    #: ``rings=15`` gives 721 facets per eye, which is Drosophila's real count
+    #: (~750 ommatidia).  It costs 0.8 s to build and 4.4 ms per frame -- 227
+    #: fps, seven times the 30 fps a live game needs -- so there is no reason
+    #: for the eye to be smaller than the animal's while watching. Training is
+    #: where a smaller eye pays: ``rings=6`` (127 facets/eye) runs roughly twice
+    #: the environment steps per second, which matters across a million of them.
+    spec: str = "synthetic:rings=15"
     min_synapse_count: float = 5.0
     normalise: str = "in_degree"
     #: Recurrent gain.  Not cosmetic: at gain 1.0 the in-degree-normalised

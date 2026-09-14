@@ -36,6 +36,12 @@ from flyds1.vision.ommatidia import (
 )
 from flyds1.vision.reichardt import ReichardtBank, ReichardtConfig
 
+#: Ommatidia per eye in a real Drosophila melanogaster.  Each one carries eight
+#: photoreceptors (R1-R8), but R1-6 all look in the same direction and pool onto
+#: one lamina cartridge (neural superposition), so the count of *spatial samples*
+#: is the count of ommatidia -- not of photoreceptors.
+DROSOPHILA_OMMATIDIA_PER_EYE = 750
+
 
 @dataclass
 class FrontEndConfig:
@@ -254,11 +260,17 @@ class RetinaFrontEnd:
         cov = ", ".join(f"{s}={v:.0%}" for s, v in sorted(self.coverage().items()))
         screen = self.screen_coverage()
         warning = "  <- the retina sees only part of the screen\n" if screen < 0.9 else "\n"
+        per_eye = self.n_photoreceptors / max(1, len(self.eyes))
+        fidelity = (
+            f"  {per_eye:.0f} facets per eye "
+            f"({per_eye / DROSOPHILA_OMMATIDIA_PER_EYE:.0%} of Drosophila's ~750)\n"
+        )
         return (
             f"RetinaFrontEnd: {self.n_photoreceptors} photoreceptors over {len(self.eyes)} eyes, "
             f"screen {self.cfg.screen.width}x{self.cfg.screen.height} "
             f"({self.cfg.screen.fov_h_deg:.0f}x{self.cfg.screen.fov_v_deg:.0f} deg)\n"
-            f"  facets that see the screen: {cov}\n"
+            + fidelity
+            + f"  facets that see the screen: {cov}\n"
             f"  screen width covered by the retina: {screen:.0%}" + warning +
             f"  motion: {self.cfg.motion_mode} "
             f"({self.n_motion_channels} channels/facet) -> obs size {self.obs_size}"

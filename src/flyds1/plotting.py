@@ -69,6 +69,45 @@ def signed_colormap(values: np.ndarray) -> np.ndarray:
     return np.clip(rgb * 255, 0, 255).astype(np.uint8)
 
 
+#: Cache of pixel -> facet assignments.  The retina's geometry never changes
+#: during a run, but building the assignment costs O(pixels x facets): at a real
+#: fly's 721 facets per eye that is ~50M distances, which is acceptable once and
+#: hopeless at 30 frames a second.
+_FACET_LAYOUTS: dict[tuple, tuple[np.ndarray, np.ndarray, tuple[int, int]]] = {}
+
+
+def _facet_layout(coords: np.ndarray, size: int, radius_deg: float):
+    """Nearest-facet index and coverage mask per pixel, computed once per eye."""
+    key = (coords.tobytes(), coords.shape, int(size), float(radius_deg))
+    cached = _FACET_LAYOUTS.get(key)
+    if cached is not None:
+        return cached
+
+    lo = coords.min(axis=0) - radius_deg
+    hi = coords.max(axis=0) + radius_deg
+    span = np.maximum(hi - lo, 1e-6)
+    ys = np.linspace(hi[1], lo[1], size)
+    xs = np.linspace(lo[0], hi[0], int(size * span[0] / span[1]) or size)
+    gx, gy = np.meshgrid(xs, ys)
+    grid = np.stack([gx.ravel(), gy.ravel()], axis=1)
+
+    # chunked, so the full distance matrix never materialises
+    nearest = np.empty(len(grid), dtype=np.int64)
+    closest = np.empty(len(grid), dtype=float)
+    for start in range(0, len(grid), 4096):
+        block = grid[start : start + 4096]
+        d = np.linalg.norm(block[:, None, :] - coords[None, :, :], axis=-1)
+        index = np.argmin(d, axis=1)
+        nearest[start : start + len(block)] = index
+        closest[start : start + len(block)] = d[np.arange(len(block)), index]
+
+    layout = (nearest, closest <= radius_deg, gy.shape)
+    if len(_FACET_LAYOUTS) > 8:  # a couple of eyes at a couple of sizes, not a leak
+        _FACET_LAYOUTS.clear()
+    _FACET_LAYOUTS[key] = layout
+    return layout
+
+
 def facet_image(
     coords_deg: np.ndarray,
     values: np.ndarray,
@@ -84,17 +123,8 @@ def facet_image(
         raise ValueError(f"{len(coords)} facets but {len(vals)} values")
     if len(coords) == 0:
         return np.zeros((size, size, 3), dtype=np.uint8)
-    lo = coords.min(axis=0) - radius_deg
-    hi = coords.max(axis=0) + radius_deg
-    span = np.maximum(hi - lo, 1e-6)
-    ys = np.linspace(hi[1], lo[1], size)
-    xs = np.linspace(lo[0], hi[0], int(size * span[0] / span[1]) or size)
-    gx, gy = np.meshgrid(xs, ys)
-    grid = np.stack([gx.ravel(), gy.ravel()], axis=1)
-    d = np.linalg.norm(grid[:, None, :] - coords[None, :, :], axis=-1)
-    nearest = np.argmin(d, axis=1)
-    within = d[np.arange(len(grid)), nearest] <= radius_deg
-    picture = np.where(within, vals[nearest], np.nan).reshape(gy.shape)
+    nearest, within, shape = _facet_layout(coords, size, radius_deg)
+    picture = np.where(within, vals[nearest], np.nan).reshape(shape)
     filled = np.nan_to_num(picture, nan=0.0)
     rgb = signed_colormap(filled) if signed else np.stack([to_uint8(filled)] * 3, axis=-1)
     rgb[~np.isfinite(picture)] = 24  # background
