@@ -217,3 +217,42 @@ def test_reward_weights_are_configurable():
 def test_macro_duration():
     macro = Macro(steps=((("forward",), 1.5), ((), 0.5)))
     assert macro.duration_s == pytest.approx(2.0)
+
+
+def test_boss_env_runs_a_recorded_route_on_reset(tmp_path):
+    from flyds1.envs.input_backends import DryRunBackend
+    from flyds1.envs.navigation import Route, Waypoint
+
+    backend = DryRunBackend()
+    source = FakeFight(backend)
+
+    # record a two-leg route against this fake game, then point the env at it
+    route = Route(
+        waypoints=(
+            Waypoint(buttons=("forward",), seconds=0.01, name="leg 0", retries=0),
+            Waypoint(buttons=("forward",), seconds=0.01, name="leg 1", retries=0),
+        ),
+        name="test",
+    )
+    bindings = {b.name: b.key for b in DARKSOULS_ACTIONS.buttons}
+    recorded = route.record(
+        backend, bindings, source.grab, sleep_fn=lambda _s: None, fps=10_000.0
+    )
+    path = recorded.save(tmp_path / "route.npz")
+
+    env, source2, backend2 = make_env(route_path=str(path))
+    assert env.route is not None and len(env.route.waypoints) == 2
+
+    env.reset(options={"skip_macros": True})
+    env.state = "dead"          # force the run-back path on the next reset
+    source2.t = 0
+    source2.finished = False
+    source2.boss_hp = 1.0
+    source2.player_hp = 1.0
+    backend2.log.clear()
+
+    _, info = env.reset()
+    pressed = [key for kind, key in backend2.log if kind == "press"]
+    assert "w" in pressed, "the recorded route should have walked forward"
+    assert info["route"] is not None
+    assert env.last_route_result is not None

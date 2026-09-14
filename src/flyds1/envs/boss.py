@@ -17,9 +17,13 @@ What this is honest about:
   i.e. ~15k decisions an hour. Published single-boss RL runs use millions.
   :meth:`BossFightEnv.budget` prints this arithmetic for your settings, because
   it decides whether an experiment is feasible before it decides anything else.
-* **The run-back is scripted, not learned**, and it is specific to your
-  character, your route, and your frame rate. The default macro is a
-  placeholder; record your own and check it with ``flyds1 watch``.
+* **The run-back is a replayed route, not navigation.** The way back from the
+  bonfire never changes, so it needs reliable execution rather than
+  pathfinding: record it once with ``flyds1 route --record`` and every segment
+  gets a visual checkpoint that is verified on the way (see
+  :mod:`flyds1.envs.navigation`). A run-back that quietly went the wrong way
+  turns every following attempt into noise, so a lost route abandons the
+  attempt instead.
 * **The detectors are pixel heuristics.** They are tested against synthetic
   footage here; against your actual capture they need calibrating.
 """
@@ -33,6 +37,7 @@ import numpy as np
 
 from flyds1.envs.detectors import DetectorConfig, FightStateDetector
 from flyds1.envs.input_backends import InputBackend, make_input_backend
+from flyds1.envs.navigation import Route
 from flyds1.envs.screen import CaptureRegion, FrameSource, make_frame_source
 from flyds1.motor.actions import DARKSOULS_ACTIONS, ActionSpec
 from flyds1.vision.ommatidia import luminance, resize_nearest
@@ -120,6 +125,10 @@ class BossConfig:
     wait_after_death_s: float = 12.0    # the game's own reload
     runback: Macro = field(default_factory=lambda: DEFAULT_RUNBACK)
     enter_fog: Macro = field(default_factory=lambda: DEFAULT_ENTER_FOG)
+    #: A recorded, checkpoint-verified route (``flyds1 route --record``). When
+    #: set it replaces the blind ``runback``/``enter_fog`` macros: same idea,
+    #: but it notices when it has gone wrong.
+    route_path: str | None = None
 
     detectors: DetectorConfig = field(default_factory=DetectorConfig)
     reward: BossRewardConfig = field(default_factory=BossRewardConfig)
@@ -157,6 +166,10 @@ class BossFightEnv(gym.Env):
             )
         self._sleep = sleep_fn if sleep_fn is not None else time.sleep
         self.detector = FightStateDetector(self.cfg.detectors)
+        self.route = Route.load(self.cfg.route_path) if self.cfg.route_path else None
+        #: Result of the most recent run-back, or None if it was not run.
+        self.last_route_result = None
+        self.routes_lost = 0
 
         self.action_space = self.spec_actions.gym_space()
         self.observation_space = spaces.Box(
@@ -234,8 +247,7 @@ class BossFightEnv(gym.Env):
         skip = bool(options and options.get("skip_macros"))
         if self.state in ("dead", "ended") and not skip:
             self._sleep(self.cfg.wait_after_death_s)
-            self.cfg.runback.play(self.input, self.bindings, self._sleep)
-            self.cfg.enter_fog.play(self.input, self.bindings, self._sleep)
+            self._run_back()
 
         self.detector.reset()
         self.state = "waiting"
@@ -246,8 +258,36 @@ class BossFightEnv(gym.Env):
                 self.state = "fighting"
                 break
         self.attempts += 1
-        info = {**state, "state": self.state, "attempts": self.attempts, "kills": self.kills}
+        info = {
+            **state,
+            "state": self.state,
+            "attempts": self.attempts,
+            "kills": self.kills,
+            "routes_lost": self.routes_lost,
+            "route": self.last_route_result.describe() if self.last_route_result else None,
+        }
         return frames[-1], info
+
+    def _run_back(self, steer=None) -> None:
+        """Get from the bonfire to the fog gate.
+
+        Prefers the recorded route, which verifies where it ends up; falls back
+        to the blind macros when no route has been recorded yet.
+        """
+        if self.route is not None:
+            self.last_route_result = self.route.run(
+                self.input,
+                self.bindings,
+                self.source.grab,
+                sleep_fn=self._sleep,
+                fps=self.cfg.target_fps,
+                steer=steer,
+            )
+            if not self.last_route_result.completed:
+                self.routes_lost += 1
+            return
+        self.cfg.runback.play(self.input, self.bindings, self._sleep)
+        self.cfg.enter_fog.play(self.input, self.bindings, self._sleep)
 
     def step(self, action):
         held, (dx, dy) = self.spec_actions.decode(action)

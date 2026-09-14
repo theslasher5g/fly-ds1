@@ -7,6 +7,7 @@
     flyds1 selftest --png out/         run the whole pipeline offline and check it
     flyds1 calibrate --frame shot.png  check HUD regions and field of view on a real frame
     flyds1 watch --frames clip/         run the brain over recorded game footage
+    flyds1 route --record r.npz        walk the run-back once and remember what it looks like
     flyds1 live --port 8000            watch the fly play in a browser, live
     flyds1 budget                      how many boss attempts an hour of real time buys
     flyds1 tune                        sweep the recurrent gain and recommend one
@@ -469,6 +470,70 @@ def cmd_live(args) -> int:
     return 0
 
 
+def cmd_route(args) -> int:
+    """Record or verify the run-back from the bonfire to the fog gate.
+
+    The way back never changes, so this is route *execution*, not pathfinding:
+    walk it once with ``--record`` (standing where the run-back starts), and
+    every segment gets a reference frame that later runs are checked against.
+    """
+    import yaml
+
+    from flyds1.envs.input_backends import make_input_backend
+    from flyds1.envs.navigation import DEFAULT_ASYLUM_ROUTE, Route, Waypoint
+    from flyds1.envs.screen import make_frame_source
+    from flyds1.pipeline import action_spec_for
+
+    cfg = _load_config(args)
+    boss = cfg.env.boss
+    source = make_frame_source(
+        args.source or boss.frame_source, boss.capture, path=boss.replay_path
+    )
+    backend = make_input_backend("dry" if args.dry_run else boss.input_backend,
+                                 window=boss.window_name)
+    spec = action_spec_for(cfg)
+    bindings = {b.name: b.key for b in spec.buttons}
+
+    if args.steps:
+        data = yaml.safe_load(Path(args.steps).read_text())
+        route = Route(
+            waypoints=tuple(
+                Waypoint(
+                    buttons=tuple(entry.get("buttons", [])),
+                    seconds=float(entry.get("seconds", 1.0)),
+                    name=str(entry.get("name", "")),
+                    retries=int(entry.get("retries", 2)),
+                )
+                for entry in data["waypoints"]
+            ),
+            name=str(data.get("name", "route")),
+        )
+    elif args.verify:
+        route = Route.load(args.verify)
+    else:
+        route = DEFAULT_ASYLUM_ROUTE
+        print("no --steps given, using the placeholder Undead Asylum route:")
+
+    print(route.describe())
+    if args.dry_run:
+        print("dry run: no keys are sent, so the character will not actually move")
+
+    if args.record:
+        recorded = route.record(
+            backend, bindings, source.grab, fps=boss.target_fps, threshold=args.threshold
+        )
+        path = recorded.save(args.record)
+        print(f"\nrecorded {len(recorded.waypoints)} checkpoints -> {path}")
+        print("point the boss env at it with --set env.boss.route_path=" + str(path))
+        return 0
+
+    result = route.run(backend, bindings, source.grab, fps=boss.target_fps)
+    print("\n" + result.describe())
+    for index, score in enumerate(result.scores):
+        print(f"  waypoint {index} ({route.waypoints[index].name or '-'}): match {score:+.2f}")
+    return 0 if result.completed else 1
+
+
 def cmd_budget(args) -> int:
     """Print the real-time arithmetic of a boss-fight run.
 
@@ -669,6 +734,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_watch.add_argument("--frames", required=True, help="folder of frames or .npy stack")
     p_watch.add_argument("--png", help="write diagnostic panels to this directory")
     p_watch.set_defaults(func=cmd_watch)
+
+    p_route = sub.add_parser(
+        "route", help="record or verify the run-back route", **sub_kwargs
+    )
+    p_route.add_argument("--record", help="walk the route and save checkpoints to this .npz")
+    p_route.add_argument("--verify", help="load this route and walk it, checking every checkpoint")
+    p_route.add_argument("--steps", help="YAML describing the waypoints to record")
+    p_route.add_argument("--source", help="frame source override, e.g. mss or replay")
+    p_route.add_argument("--dry-run", action="store_true", help="send no input")
+    p_route.add_argument("--threshold", type=float, default=0.55,
+                         help="how close a checkpoint has to match (default 0.55)")
+    p_route.set_defaults(func=cmd_route)
 
     p_live = sub.add_parser("live", help="watch the agent play in a browser", **sub_kwargs)
     p_live.add_argument("--model", help="trained model .zip (random actions if omitted)")

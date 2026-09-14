@@ -118,3 +118,67 @@ frozen connectome, a linear read-out of a few dozen descending neurons, and a
 budget measured in days of real-time play. The infrastructure here is honest
 about which of those it can help with — it removes the overhead and makes the
 signal visible. It cannot make the signal exist.
+
+## The run-back: route execution, not pathfinding
+
+The way from the bonfire to the fog gate never changes. That makes it a
+*replay* problem, not a navigation problem — no map, no localisation, no
+search. What it does need is noticing when the replay has gone wrong, because a
+run-back that silently walked somewhere else turns every following attempt into
+noise.
+
+Write the rough legs as YAML:
+
+```yaml
+name: undead asylum -> asylum demon
+waypoints:
+  - {name: out of the bonfire room, buttons: [forward], seconds: 4.0}
+  - {name: turn to the stairs,      buttons: [forward, right], seconds: 1.0}
+  - {name: up the stairs,           buttons: [forward], seconds: 3.5}
+  - {name: through the fog,         buttons: [forward], seconds: 2.0}
+```
+
+Stand where the run-back starts, then walk it once for real:
+
+```
+flyds1 route --steps route.yaml --record route.npz --source mss
+flyds1 --set env.boss.route_path=route.npz --set env.kind=boss live
+```
+
+Recording captures a reference frame at the end of every leg. On later runs
+each leg is checked against its reference (zero-mean normalised correlation on
+a 24x42 greyscale patch — coarse on purpose, so torch flicker and the
+character's own animation do not count as "somewhere else"). A leg that does
+not match gets an unstick wiggle and one more try; if it still does not match,
+the attempt is abandoned and counted in `routes_lost` rather than continued.
+
+`flyds1 route --verify route.npz` walks it and prints the match score per leg,
+which is how you tune `--threshold`: scores on a good run tell you how much
+headroom you have.
+
+**Local steering can come from the brain.** `Route.run` takes a `steer`
+callback returning extra buttons per frame, so the route supplies the direction
+while the connectome's looming-sensitive cells keep the character off the
+walls. That division — route memory plus reactive avoidance — is how insects
+navigate; they do not plan paths either.
+
+## Would it be better to read the game's memory instead?
+
+For the *bookkeeping*, yes, clearly: player HP, boss HP, position and animation
+state as exact numbers instead of pixel heuristics removes every calibration
+problem on this page at once, and real coordinates would make actual
+pathfinding trivial. That is what soulsgym does for DS3, and the memory offsets
+for DS1 Remastered are documented by the community. The costs are version-
+specific offsets to maintain, and that anti-cheat treats process memory access
+as tampering — fine for an offline single-player session, not for going online
+afterwards.
+
+For the *experiment*, no. The question here is whether a fly's visual system can
+drive behaviour in a game. A fly handed exact coordinates is not a fly playing
+Dark Souls; it is a lookup table. The vision has to stay pixels.
+
+So the sensible split is hybrid: vision from pixels, bookkeeping from memory if
+you want the robustness. The code is arranged for it —
+:class:`flyds1.envs.detectors.FightStateDetector` is the whole state interface,
+and a memory-backed implementation drops in without touching the env, the
+retina, or the brain.

@@ -143,6 +143,7 @@ env:
       - - - forward
         - 2.0
       name: through the fog gate
+    route_path: null
     detectors:
       player_hp:
         x0: 0.035
