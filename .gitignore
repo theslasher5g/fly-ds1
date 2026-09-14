@@ -11,3 +11,4 @@ checkpoints/
 *.npz
 *.pt
 *.zip
+live/
