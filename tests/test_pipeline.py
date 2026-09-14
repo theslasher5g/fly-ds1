@@ -158,3 +158,29 @@ def test_pipeline_assembles_the_game_environment():
             break
     assert info["dry_run"] is True
     assert np.isfinite(obs).all()
+
+
+def test_retina_wrapper_exposes_its_last_observation(tmp_path):
+    """The live viewer reads this back instead of re-processing the frame."""
+    from flyds1.pipeline import build_network, make_env
+
+    cfg = small_config().apply_overrides({"env.brain_location": "wrapper"})
+    network = build_network(cfg)
+    env, _ = make_env(cfg, network, seed=0)
+    retina = env  # FlyBrainWrapper -> RetinaWrapper
+    while type(retina).__name__ != "RetinaWrapper":
+        retina = retina.env
+    retina.keep_frame_in_info = True
+
+    env.reset(seed=0)
+    first = np.array(retina.last_observation, copy=True)
+    assert not first.any(), "a still fly looking at a still scene sees nothing"
+
+    # move: the Weber contrast is zero by construction until the scene changes
+    walk = np.array([1, 0, 0, 1], dtype=np.int8)
+    for _ in range(3):
+        _, _, _, _, info = env.step(walk)
+    assert "frame" in info
+    assert retina.last_observation.shape == (retina.front_end.obs_size,)
+    assert retina.last_observation.any()
+    assert not np.array_equal(first, retina.last_observation)

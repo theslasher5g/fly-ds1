@@ -399,6 +399,9 @@ def cmd_live(args) -> int:
     brain = _find_wrapper(env, "FlyBrainWrapper")
     if retina is None or brain is None:  # pragma: no cover - defensive
         raise ValueError("could not find the retina/brain wrappers in the env chain")
+    # envs that do not repeat actions (the arena) hand over a single frame, and
+    # only if asked -- without this the viewer's first panel is black
+    retina.keep_frame_in_info = True
 
     front_end = retina.front_end
     side = sorted(front_end.eyes)[-1]
@@ -433,12 +436,12 @@ def cmd_live(args) -> int:
 
                 frames = info.get("frames")
                 frame = frames[-1] if frames else info.get("frame")
-                if frame is None:
+                if frame is None:  # pragma: no cover - defensive
                     frame = np.zeros((cfg.frontend.screen.height, cfg.frontend.screen.width))
-                retina_obs = front_end.process(frame, retina.dt) if frames is None else None
-                photo, motion = front_end.layout.split(
-                    retina_obs if retina_obs is not None else front_end.process(frame, retina.dt)
-                )
+                # The retina already processed this frame inside the wrapper;
+                # re-running it here would double-count the adaptation state and
+                # show a picture the brain never saw. Read its last output back.
+                photo, motion = front_end.layout.split(np.asarray(retina.last_observation))
                 horizontal = None
                 if front_end.layout.motion_mode == "retinotopic":
                     horizontal = (motion[eye["slots"]][:, 0] - motion[eye["slots"]][:, 1])

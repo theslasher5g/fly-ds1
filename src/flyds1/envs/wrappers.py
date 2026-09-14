@@ -77,6 +77,10 @@ class RetinaWrapper(gym.Wrapper):
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(self.front_end.obs_size,), dtype=np.float32
         )
+        #: The observation this wrapper produced last.  Viewers read it back
+        #: instead of re-processing the frame, which would advance the retina's
+        #: adaptation state and show something the brain never saw.
+        self.last_observation = np.zeros(self.front_end.obs_size, dtype=np.float32)
 
     @staticmethod
     def _infer_dt(env) -> float:
@@ -101,6 +105,7 @@ class RetinaWrapper(gym.Wrapper):
         frame, info = self.env.reset(**kwargs)
         self.front_end.reset()
         obs = self.front_end.process(frame, self.dt)
+        self.last_observation = obs
         if self.keep_frame_in_info:
             info = {**info, "frame": frame}
         return obs, info
@@ -108,6 +113,7 @@ class RetinaWrapper(gym.Wrapper):
     def step(self, action):
         frame, reward, terminated, truncated, info = self.env.step(action)
         obs = self._process(frame, info)
+        self.last_observation = obs
         if self.keep_frame_in_info:
             info = {**info, "frame": frame}
         return obs, reward, terminated, truncated, info
