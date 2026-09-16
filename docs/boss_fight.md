@@ -89,10 +89,32 @@ deciding every frame asks the brain to answer before it has been told.
 flyds1 live --set env.kind=boss --set env.boss.frame_source=mss --port 8000
 ```
 
-Open the URL. Four panels: the game, what the eye sees, motion, and the
-descending neurons that produce the key presses. The viewer is read-only and
-runs in a browser on purpose — an overlay window on the same screen steals focus
-from the game mid-fight.
+Open the URL. The panel is read-only, and it runs in a browser on purpose — an
+overlay window on the same screen steals focus from the game mid-fight.
+
+What it shows, and why each one is there:
+
+| Panel | Reads | Answers |
+| --- | --- | --- |
+| **eyes** | both retinae, per ommatidium | is the fly seeing the fight at all |
+| **hemisphere** | `neurons.side`, per stage | which half of the brain is driving — and at which stage a left/right signal disappears |
+| **threat** | LC4 + LPLC2 pooled | is the looming detector firing (in a real fly, these trigger escape) |
+| **population flow** | mean, active fraction and modulation depth per `super_class` | where the drive dies on its way to the descending neurons |
+| **motion detectors** | T4a–d (ON) and T5a–d (OFF) | which direction the fly thinks the world is moving |
+| **optic flow** | HS (yaw), VS (pitch/roll) | am I turning, am I rising |
+| **DN → keys** | decoder weight × live rate | *which* descending neuron pressed *which* key |
+| **history** | last ~20 s | causality: what moved before the key press |
+
+Modulation depth is the number to watch. A stage with a high mean and near-zero
+modulation is passing a constant, which means it carries no information — that is
+the failure documented in [results.md](results.md), and this is where you see it
+happen live rather than in a post-hoc probe.
+
+`flyds1 info` lists which groups exist for your connectome before you start; an
+empty panel there means the cell type is absent from the dataset, not silent.
+`--viewer classic` brings back the old four-panel PNG filmstrip, and
+`--frame-every N` trades game-frame smoothness for step budget (the PNG encode
+is the only expensive part of an update).
 
 When the dry run looks right, set `env.boss.dry_run: false` and
 `env.boss.input_backend: auto`. **Single-player, offline, with the

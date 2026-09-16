@@ -276,3 +276,125 @@ def test_a_real_synthetic_network_populates_the_panels():
         assert name in idx.types, f"{name} missing: {idx.describe()}"
     by_panel = {idx.type_meta[n].panel for n in idx.types}
     assert {"motion_on", "motion_off", "threat", "flow"} <= by_panel
+
+
+# ----------------------------------------------------------------------
+def test_panel_publishes_layout_state_and_assets(tmp_path):
+    from flyds1.viz.panel import ASSETS, PanelView
+
+    view = PanelView(tmp_path, refresh_ms=77)
+    builder = _builder()
+    view.publish_layout(builder.layout())
+    view.update(builder.update(np.zeros(builder.index.n_neurons)),
+                frame=np.zeros((20, 30, 3), dtype=np.uint8))
+
+    for name in ASSETS:
+        assert (tmp_path / name).exists()
+    assert "77" in (tmp_path / "index.html").read_text()
+    assert json.loads((tmp_path / "layout.json").read_text())["n_neurons"] == 11
+    assert json.loads((tmp_path / "state.json").read_text())["step"] == 0
+    assert (tmp_path / "frame.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert not list(tmp_path.glob(".*tmp*")), "no half-written temporaries left behind"
+
+
+def test_panel_state_is_valid_before_the_first_update(tmp_path):
+    """The page polls immediately; a missing state.json is a console error on
+    every tick and nothing to show for it."""
+    from flyds1.viz.panel import PanelView
+
+    PanelView(tmp_path)
+    assert json.loads((tmp_path / "state.json").read_text()) == {"waiting": True}
+
+
+def test_panel_publishes_the_frame_less_often_than_the_state(tmp_path):
+    """The PNG encode is the only expensive part of an update, so it runs at a
+    fraction of the state rate -- deliberately, not by accident."""
+    from flyds1.viz.panel import PanelView
+
+    view = PanelView(tmp_path, frame_every=3)
+    builder = _builder()
+    state = builder.update(np.zeros(builder.index.n_neurons))
+
+    written = []
+    frames = [np.full((8, 8, 3), v, dtype=np.uint8) for v in (10, 20, 30, 40)]
+    for frame in frames:
+        view.update(state, frame=frame)
+        written.append((tmp_path / "frame.png").stat().st_mtime_ns)
+    # steps 0 and 3 publish; 1 and 2 do not
+    assert written[0] == written[1] == written[2]
+    assert written[3] != written[0]
+
+
+def test_panel_downscales_a_large_frame(tmp_path):
+    from flyds1.viz.panel import PanelView
+
+    small = PanelView(tmp_path / "a", frame_max_width=64)
+    large = PanelView(tmp_path / "b", frame_max_width=10_000)
+    frame = np.random.default_rng(0).integers(0, 255, (540, 960, 3), dtype=np.uint8)
+    builder = _builder()
+    state = builder.update(np.zeros(builder.index.n_neurons))
+    small.update(state, frame=frame)
+    large.update(state, frame=frame)
+    assert (tmp_path / "a" / "frame.png").stat().st_size < \
+           (tmp_path / "b" / "frame.png").stat().st_size
+
+
+def test_panel_serves_every_file_the_page_needs(tmp_path):
+    import urllib.request
+
+    from flyds1.viz.panel import PanelView
+
+    view = PanelView(tmp_path)
+    builder = _builder()
+    view.publish_layout(builder.layout())
+    view.update(builder.update(np.zeros(builder.index.n_neurons)),
+                frame=np.zeros((8, 8), dtype=np.uint8))
+    url = view.serve(port=0)
+    try:
+        for name in ("", "fly.css", "fly.js", "layout.json", "state.json", "frame.png"):
+            with urllib.request.urlopen(url + name, timeout=5) as response:
+                assert response.status == 200
+                # a cached state.json freezes the panel while the run continues,
+                # which reads as a hung agent
+                assert "no-store" in response.headers.get("Cache-Control", "")
+                assert response.read()
+    finally:
+        view.stop()
+
+
+def test_decoder_weight_is_none_without_a_policy():
+    from flyds1.cli import _decoder_weight
+
+    assert _decoder_weight(None, 4, 8) is None
+
+
+def test_json_payload_is_smaller_than_the_png_it_replaces(tmp_path):
+    """The claim in the panel's docstring, checked: a richer viewer that costs
+    more per step would not be worth having."""
+    from flyds1.connectome.loader import load_connectome
+    from flyds1.plotting import bar_chart, encode_png, facet_image, filmstrip, to_uint8
+
+    connectome = load_connectome("synthetic:rings=6")
+    idx = PopulationIndex.from_neurons(connectome.neurons)
+    photo = connectome.neurons.photoreceptor_mask()
+    coords = connectome.neurons.eye_coord[photo]
+    rng = np.random.default_rng(0)
+    rates = rng.random(idx.n_neurons)
+
+    builder = LiveStateBuilder(idx, eye_coords={"left": coords[: len(coords) // 2],
+                                               "right": coords[len(coords) // 2:]})
+    state = builder.update(
+        rates,
+        eyes={"left": {"photo": rng.normal(size=len(coords) // 2)},
+              "right": {"photo": rng.normal(size=len(coords) - len(coords) // 2)}},
+        dn_rates=rates[idx.stages["descending"]],
+    )
+    json_bytes = len(LiveStateBuilder.to_json(state).encode())
+
+    classic = encode_png(filmstrip([
+        to_uint8(rng.random((180, 320))),
+        facet_image(coords, rng.normal(size=len(coords)), signed=True),
+        facet_image(coords, rng.normal(size=len(coords)), signed=True),
+        bar_chart(rates[idx.stages["descending"]], width=260, height=180),
+    ]))
+    assert json_bytes < len(classic), f"json {json_bytes} vs png {len(classic)}"

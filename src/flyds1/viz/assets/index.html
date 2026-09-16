@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>flyds1 &mdash; live</title>
+<link rel="stylesheet" href="fly.css">
+
+<header>
+  <b>flyds1</b>
+  <span class="dim" id="subtitle">connecting&hellip;</span>
+  <span id="banner"></span>
+</header>
+
+<div id="waiting">waiting for the first decision&hellip;</div>
+
+<main id="panels" hidden>
+
+  <section>
+    <h2>game <span class="note" id="frame-note"></span></h2>
+    <img id="frame" alt="game frame">
+  </section>
+
+  <section>
+    <h2>status</h2>
+    <p id="status"></p>
+  </section>
+
+  <section class="wide">
+    <h2>what the eyes see
+      <span class="note">left eye &middot; right eye &mdash; Weber contrast per ommatidium</span>
+    </h2>
+    <div class="controls">
+      <label><input type="radio" name="eyech" value="photo" checked> photoreceptors</label>
+      <label><input type="radio" name="eyech" value="motion"> horizontal motion</label>
+    </div>
+    <canvas id="eyes" width="900" height="300"></canvas>
+  </section>
+
+  <section>
+    <h2>hemisphere <span class="note">which half is driving</span></h2>
+    <canvas id="balance" width="420" height="200"></canvas>
+  </section>
+
+  <section>
+    <h2>threat <span class="note">LC4 + LPLC2 looming</span></h2>
+    <canvas id="threat" width="420" height="200"></canvas>
+  </section>
+
+  <section class="wide">
+    <h2>population flow
+      <span class="note">eye &rarr; optic lobe &rarr; projection &rarr; central &rarr; descending;
+      modulation is what carries information</span>
+    </h2>
+    <canvas id="flow" width="900" height="230"></canvas>
+  </section>
+
+  <section>
+    <h2>motion detectors <span class="note">T4 = ON edges, T5 = OFF edges</span></h2>
+    <canvas id="types" width="420" height="300"></canvas>
+  </section>
+
+  <section>
+    <h2>optic flow <span class="note">HS = yaw, VS = pitch/roll</span></h2>
+    <canvas id="flowcells" width="420" height="300"></canvas>
+  </section>
+
+  <section class="wide">
+    <h2>descending neurons &rarr; keys
+      <span class="note">line brightness = |decoder weight| &times; live rate</span>
+    </h2>
+    <canvas id="dn" width="900" height="420"></canvas>
+  </section>
+
+  <section class="wide">
+    <h2>history <span class="note">last ~20 s</span></h2>
+    <canvas id="series" width="900" height="260"></canvas>
+  </section>
+
+</main>
+
+<script>window.FLY_REFRESH_MS = __REFRESH_MS__;</script>
+<script src="fly.js"></script>
+</html>

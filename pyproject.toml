@@ -32,6 +32,14 @@ flyds1 = "flyds1.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# The live panel's page, stylesheet and renderer are read from the installed
+# package at runtime (flyds1.viz.panel copies them into the served directory).
+# Without this they are present under an editable install and silently missing
+# from a wheel, which is the worst of the two failure modes: it works here and
+# breaks for anyone who installs normally.
+[tool.setuptools.package-data]
+"flyds1.viz" = ["assets/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = ["ignore::DeprecationWarning"]

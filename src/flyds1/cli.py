@@ -410,6 +410,54 @@ def _find_wrapper(env, name: str):
     return None
 
 
+def _decoder_weight(policy, n_actions: int, n_dn: int):
+    """``(n_actions, n_dn)`` decoder weights, or ``None`` if there is no policy.
+
+    The DN-to-key panel needs these to answer "which descending neuron pressed
+    which key". A random policy has no decoder, and an untrained one has an
+    orthogonal-init matrix that says nothing -- both are honest ``None``/noise
+    rather than a fabricated wiring diagram, so the panel simply omits the
+    lines. Only the actor's final linear layer is wanted; if the policy is not
+    one of ours, say so by returning None instead of guessing at a tensor.
+    """
+    if policy is None:
+        return None
+    try:
+        import torch
+
+        for module in policy.policy.modules():
+            weight = getattr(module, "weight", None)
+            if isinstance(weight, torch.Tensor) and tuple(weight.shape) == (n_actions, n_dn):
+                return weight.detach().cpu().numpy()
+    except Exception:  # pragma: no cover - diagnostics must not kill a run
+        return None
+    return None
+
+
+def _make_panel(args, cfg, net, front_end, spec, policy):
+    """Build the canvas panel and its state builder."""
+    from flyds1.viz.groups import PopulationIndex
+    from flyds1.viz.panel import PanelView
+    from flyds1.viz.state import LiveStateBuilder
+
+    index = PopulationIndex.from_neurons(net.neurons)
+    builder = LiveStateBuilder(
+        index,
+        eye_coords={name: eye["coords"] for name, eye in front_end.eyes.items()},
+        action_names=tuple(b.name for b in spec.buttons),
+        dn_labels=tuple(str(t) for t in net.neurons.cell_type[net.output_index]),
+        decoder_weight=_decoder_weight(policy, len(spec.buttons), net.n_outputs),
+    )
+    view = PanelView(
+        Path(args.out or "live"),
+        refresh_ms=args.refresh,
+        frame_every=max(1, getattr(args, "frame_every", 3)),
+    )
+    view.publish_layout(builder.layout())
+    view.serve(args.port)
+    return view, builder
+
+
 def cmd_live(args) -> int:
     """Run the agent and stream what it sees to a local web page.
 
@@ -460,12 +508,9 @@ def cmd_live(args) -> int:
             print(f"LIVE INPUT: env.{cfg.env.kind}.dry_run is false -- keys ARE being sent to the game.")
 
     front_end = retina.front_end
+    # The classic viewer shows one eye; the panel shows both.
     side = sorted(front_end.eyes)[-1]
     eye = front_end.eyes[side]
-
-    view = LiveView(Path(args.out or "live"), refresh_ms=args.refresh)
-    url = view.serve(args.port)
-    print(f"open {url} -- panels: game | what the eye sees | motion | descending neurons")
 
     policy = None
     if args.model:
@@ -474,6 +519,17 @@ def cmd_live(args) -> int:
         policy = PPO.load(args.model, device=cfg.training.device)
     spec = action_spec_for(cfg)
     rng = np.random.default_rng(args.seed)
+
+    panel = getattr(args, "viewer", "panel") == "panel"
+    if panel:
+        view, builder = _make_panel(args, cfg, net, front_end, spec, policy)
+        print(f"open {view.url} -- eyes | hemispheres | population flow | "
+              f"cell types | DN wiring | history")
+    else:
+        view = LiveView(Path(args.out or "live"), refresh_ms=args.refresh)
+        view.serve(args.port)
+        print(f"open {view.url} -- panels: game | what the eye sees | motion | descending neurons")
+        builder = None
 
     try:
         for episode in range(args.episodes):
@@ -498,21 +554,50 @@ def cmd_live(args) -> int:
                 # re-running it here would double-count the adaptation state and
                 # show a picture the brain never saw. Read its last output back.
                 photo, motion = front_end.layout.split(np.asarray(retina.last_observation))
-                horizontal = None
-                if front_end.layout.motion_mode == "retinotopic":
-                    horizontal = (motion[eye["slots"]][:, 0] - motion[eye["slots"]][:, 1])
-                view.update(
-                    frame,
-                    eye_coords=eye["coords"],
-                    photoreceptors=photo[eye["slots"]],
-                    motion=horizontal,
-                    descending=brain.sim.outputs()[0],
-                    stats=format_stats(
-                        info,
-                        {"episode": episode, "return": total, "steps": steps,
-                         "keys": len([k for k in np.atleast_1d(action) if k > 0])},
-                    ),
-                )
+                retinotopic = front_end.layout.motion_mode == "retinotopic"
+
+                def horizontal_for(slots):
+                    """Signed horizontal motion per facet: preferred minus
+                    anti-preferred axis, which is what a T4/T5 pair encodes."""
+                    if not retinotopic:
+                        return None
+                    return motion[slots][:, 0] - motion[slots][:, 1]
+
+                if builder is not None:
+                    info = dict(info)
+                    info.setdefault("dry_run", dry_run)
+                    view.update(
+                        builder.update(
+                            brain.sim.r[0],
+                            step=steps,
+                            episode=episode,
+                            reward=float(reward),
+                            total_reward=total,
+                            eyes={
+                                name: {"photo": photo[e["slots"]],
+                                       "motion": horizontal_for(e["slots"])}
+                                for name, e in front_end.eyes.items()
+                            },
+                            dn_rates=brain.sim.outputs()[0],
+                            action=np.atleast_1d(action),
+                            held_keys=tuple(info.get("held_keys", ())),
+                            info=info,
+                        ),
+                        frame=frame,
+                    )
+                else:
+                    view.update(
+                        frame,
+                        eye_coords=eye["coords"],
+                        photoreceptors=photo[eye["slots"]],
+                        motion=horizontal_for(eye["slots"]),
+                        descending=brain.sim.outputs()[0],
+                        stats=format_stats(
+                            info,
+                            {"episode": episode, "return": total, "steps": steps,
+                             "keys": len([k for k in np.atleast_1d(action) if k > 0])},
+                        ),
+                    )
                 if terminated or truncated:
                     break
             print(f"episode {episode}: return {total:+.2f} over {steps} decisions")
@@ -813,10 +898,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_live.add_argument("--model", help="trained model .zip (random actions if omitted)")
     p_live.add_argument("--port", type=int, default=8000)
     p_live.add_argument("--out", help="directory for the viewer files (default ./live)")
-    p_live.add_argument("--refresh", type=int, default=200, help="page refresh interval, ms")
+    p_live.add_argument("--refresh", type=int, default=100, help="page refresh interval, ms")
     p_live.add_argument("--episodes", type=int, default=1)
     p_live.add_argument("--seed", type=int, default=0)
     p_live.add_argument("--deterministic", action="store_true")
+    p_live.add_argument("--viewer", choices=("panel", "classic"), default="panel",
+                        help="panel: the canvas instrument panel (hemispheres, cell types, "
+                             "DN wiring). classic: the old four-panel PNG filmstrip.")
+    p_live.add_argument("--frame-every", type=int, default=3,
+                        help="panel viewer: publish the game frame every n-th step; the "
+                             "PNG encode is the only expensive part of a panel update")
     p_live.add_argument("--skip-macros", action="store_true",
                         help="boss env: do not play the run-back macro")
     p_live.set_defaults(func=cmd_live)

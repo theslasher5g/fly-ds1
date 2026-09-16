@@ -15,13 +15,13 @@ from __future__ import annotations
 import http.server
 import socketserver
 import threading
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
 from flyds1.plotting import bar_chart, facet_image, filmstrip, save_png, to_uint8
+from flyds1.viz.server import atomic_replace
 
 PAGE = """<!doctype html>
 <meta charset="utf-8">
@@ -128,26 +128,9 @@ class LiveView:
         tmp_stats.write_text(stats)
         self._atomic_replace(tmp_stats, self.directory / "stats.txt")
 
-    @staticmethod
-    def _atomic_replace(tmp: Path, dest: Path, attempts: int = 5, delay: float = 0.02) -> None:
-        """Move ``tmp`` onto ``dest``, tolerating a concurrent reader.
-
-        On POSIX, renaming over a file someone else has open just works -- the
-        old inode lives on until they close it. On Windows it raises
-        ``PermissionError`` if the HTTP server's GET handler happens to have the
-        file open at that instant, which a 200 ms poll loop makes a routine
-        occurrence, not an edge case. A dropped viewer frame must never crash
-        the run that produces it, so this retries briefly and then gives up
-        silently, leaving ``tmp`` to be overwritten (and tried again) next call.
-        """
-        for attempt in range(attempts):
-            try:
-                tmp.replace(dest)
-                return
-            except OSError:
-                if attempt == attempts - 1:
-                    return
-                time.sleep(delay)
+    #: Shared with the canvas panel -- see :func:`flyds1.viz.server.atomic_replace`
+    #: for why a replace has to tolerate a locked target on Windows.
+    _atomic_replace = staticmethod(atomic_replace)
 
 
 def format_stats(info: dict, extra: dict | None = None) -> str:

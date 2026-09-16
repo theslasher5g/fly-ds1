@@ -297,3 +297,34 @@ def test_live_says_nothing_about_dry_run_for_the_arena(capsys):
     assert _cli(*args, "live", "--episodes", "1", "--port", "0") == 0
     out = capsys.readouterr().out
     assert "DRY RUN" not in out and "LIVE INPUT" not in out
+
+
+def test_cli_live_writes_the_panel_by_default(tmp_path):
+    args = []
+    for key, value in SMALL.items():
+        args += ["--set", f"{key}={value}"]
+    assert _cli(*args, "live", "--episodes", "1", "--port", "0",
+                "--out", str(tmp_path)) == 0
+    import json
+
+    layout = json.loads((tmp_path / "layout.json").read_text())
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert layout["n_neurons"] > 0
+    assert set(layout["eyes"]) == {"left", "right"}, "the panel shows both eyes"
+    assert len(layout["dn_labels"]) == len(state["dn"])
+    # the hemisphere gauge and the population-flow panel's data
+    assert -1.0 <= state["balance"] <= 1.0
+    assert {"sensory", "optic", "descending"} <= {s["name"] for s in state["stages"]}
+    assert state["types"]["T4a"] >= 0.0
+    assert (tmp_path / "fly.js").exists() and (tmp_path / "frame.png").exists()
+
+
+def test_cli_live_can_still_render_the_classic_filmstrip(tmp_path):
+    args = []
+    for key, value in SMALL.items():
+        args += ["--set", f"{key}={value}"]
+    assert _cli(*args, "live", "--episodes", "1", "--port", "0",
+                "--viewer", "classic", "--out", str(tmp_path)) == 0
+    assert (tmp_path / "panel.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert (tmp_path / "stats.txt").read_text()
+    assert not (tmp_path / "layout.json").exists()

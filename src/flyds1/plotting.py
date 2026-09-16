@@ -24,8 +24,8 @@ def _chunk(tag: bytes, data: bytes) -> bytes:
     )
 
 
-def save_png(image: np.ndarray, path: str | Path) -> Path:
-    """Write a greyscale ``(h, w)`` or RGB ``(h, w, 3)`` image as PNG."""
+def encode_png(image: np.ndarray) -> bytes:
+    """Encode a greyscale ``(h, w)`` or RGB ``(h, w, 3)`` image as PNG bytes."""
     arr = np.asarray(image)
     if arr.dtype != np.uint8:
         arr = to_uint8(arr)
@@ -34,13 +34,18 @@ def save_png(image: np.ndarray, path: str | Path) -> Path:
     if arr.ndim != 3 or arr.shape[-1] != 3:
         raise ValueError(f"expected (h, w) or (h, w, 3), got {np.shape(image)}")
     h, w, _ = arr.shape
-    raw = b"".join(b"\x00" + arr[y].tobytes() for y in range(h))
-    png = (
+    raw = b"".join(b"\x00" + np.ascontiguousarray(arr[y]).tobytes() for y in range(h))
+    return (
         b"\x89PNG\r\n\x1a\n"
         + _chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
         + _chunk(b"IDAT", zlib.compress(raw, 6))
         + _chunk(b"IEND", b"")
     )
+
+
+def save_png(image: np.ndarray, path: str | Path) -> Path:
+    """Write a greyscale ``(h, w)`` or RGB ``(h, w, 3)`` image as PNG."""
+    png = encode_png(image)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(png)
@@ -234,6 +239,7 @@ def filmstrip(images: list[np.ndarray], *, pad: int = 4, background: int = 40) -
 __all__ = [
     "bar_chart",
     "draw_box",
+    "encode_png",
     "facet_image",
     "filmstrip",
     "mark_points",
