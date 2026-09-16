@@ -142,6 +142,7 @@ def cmd_build(args) -> int:
 def cmd_info(args) -> int:
     from flyds1.pipeline import build_network, make_front_end
     from flyds1.vision.encoder import build_encoder_wiring
+    from flyds1.viz.groups import PopulationIndex
 
     cfg = _load_config(args)
     net = build_network(cfg)
@@ -151,6 +152,10 @@ def cmd_info(args) -> int:
     print(f"spectral radius: {net.spectral_radius():.3f}")
     print(fe.describe())
     print(wiring.describe())
+    # What the live panel can show for this connectome: an empty group here
+    # means an empty panel there, so it is worth seeing before a run rather
+    # than wondering why a box is blank mid-fight.
+    print(PopulationIndex.from_neurons(net.neurons).describe())
     print(f"rate dynamics: dt={cfg.rate.dt * 1000:.2f} ms x {cfg.rate.steps_per_frame} substeps "
           f"= {cfg.rate.frame_dt * 1000:.1f} ms per frame, activation={cfg.rate.activation}")
     print(f"env: {cfg.env.kind}, brain in {cfg.env.brain_location}, stack_k={cfg.env.stack_k}")
